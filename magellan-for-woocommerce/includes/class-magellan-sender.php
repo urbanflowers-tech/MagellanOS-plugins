@@ -334,16 +334,20 @@ class Magellan_Sender {
 	// ----------------------------------------------------------------
 
 	private static function dispatch_signed( string $endpoint, array $payload ): bool {
-		$account_id     = Magellan_Admin::get_account_id();
-		$signing_secret = Magellan_Admin::get_signing_secret();
-		if ( $account_id === '' || $signing_secret === '' ) {
+		$account_id    = Magellan_Admin::get_account_id();
+		// CRITICAL: backend stores secrets as base64 of 32 random bytes
+		// and HMAC-verifies using the raw DECODED bytes as the key.
+		// We must base64-decode here before signing — otherwise every
+		// signed request 401s. See class-magellan-admin.php.
+		$signing_bytes = Magellan_Admin::get_signing_secret_bytes();
+		if ( $account_id === '' || $signing_bytes === '' ) {
 			return false;
 		}
 
 		$body      = wp_json_encode( $payload );
 		$timestamp = time();
 		$signed    = $timestamp . '.' . $body;
-		$signature = hash_hmac( 'sha256', $signed, $signing_secret );
+		$signature = hash_hmac( 'sha256', $signed, $signing_bytes );
 
 		$response = wp_remote_post( $endpoint, [
 			'body'      => $body,

@@ -3,7 +3,7 @@
  * Plugin Name:       Magellan for WooCommerce
  * Plugin URI:        https://magellan.app
  * Description:       First-party attribution pixel for Magellan. Captures verified purchase data and sends it to Magellan for cross-platform attribution and overclaim detection.
- * Version:           2.2.0
+ * Version:           2.2.1
  * Author:            Magellan
  * Author URI:        https://magellan.app
  * License:           GPL-2.0+
@@ -25,14 +25,29 @@ if ( ! defined( 'ABSPATH' ) ) {
 // Constants
 // ---------------------------------------------------------------------
 
-define( 'MAGELLAN_VERSION',            '2.2.0' );
+define( 'MAGELLAN_VERSION',            '2.2.1' );
 define( 'MAGELLAN_PLUGIN_FILE',        __FILE__ );
 define( 'MAGELLAN_PLUGIN_DIR',         plugin_dir_path( __FILE__ ) );
 define( 'MAGELLAN_PLUGIN_URL',         plugin_dir_url( __FILE__ ) );
 
-// API base — overridable via wp-config.php for staging/test environments.
+// API base — resolved in priority order so each environment can
+// override without code changes:
+//   1. `MAGELLAN_API_BASE` define()d in wp-config.php (highest —
+//      cleanest for staging / dev installs, survives plugin updates)
+//   2. Stored option `magellan_api_base` — set by Path A configure
+//      callback or Path B bootstrap response, so the backend can ship
+//      the right base to each install at provision time
+//   3. Default `https://api.magellan.app/v1/pixel`
+//
+// Trailing slash always stripped so concatenation with /event etc.
+// stays clean. Keep in sync with Magellan_Admin::get_api_base().
 if ( ! defined( 'MAGELLAN_API_BASE' ) ) {
-	define( 'MAGELLAN_API_BASE', 'https://api.magellan.app/v1/pixel' );
+	$mgln_api_opt = get_option( 'magellan_api_base', '' );
+	$mgln_api_b   = is_string( $mgln_api_opt ) && $mgln_api_opt !== ''
+		? rtrim( $mgln_api_opt, '/' )
+		: 'https://api.magellan.app/v1/pixel';
+	define( 'MAGELLAN_API_BASE', $mgln_api_b );
+	unset( $mgln_api_opt, $mgln_api_b );
 }
 
 define( 'MAGELLAN_ENDPOINT_EVENT',     MAGELLAN_API_BASE . '/event' );
