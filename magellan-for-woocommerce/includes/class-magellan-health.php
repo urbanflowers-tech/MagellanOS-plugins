@@ -46,16 +46,19 @@ class Magellan_Health {
 		$report = self::collect();
 		update_option( Magellan_Admin::OPT_HEALTH_DATA, $report );
 
-		// Send via signed dispatch — non-blocking
-		$account_id     = Magellan_Admin::get_account_id();
-		$signing_secret = Magellan_Admin::get_signing_secret();
-		if ( $account_id === '' || $signing_secret === '' ) {
+		// Send via signed dispatch — non-blocking.
+		// CRITICAL: must base64-decode the stored secret to raw bytes
+		// before HMAC. See class-magellan-admin.php::get_signing_secret_bytes
+		// and the matching backend at supabase/functions/_shared/truth-layer/signature.ts.
+		$account_id    = Magellan_Admin::get_account_id();
+		$signing_bytes = Magellan_Admin::get_signing_secret_bytes();
+		if ( $account_id === '' || $signing_bytes === '' ) {
 			return;
 		}
 
 		$body      = wp_json_encode( $report );
 		$timestamp = time();
-		$signature = hash_hmac( 'sha256', $timestamp . '.' . $body, $signing_secret );
+		$signature = hash_hmac( 'sha256', $timestamp . '.' . $body, $signing_bytes );
 
 		wp_remote_post( MAGELLAN_ENDPOINT_HEALTH, [
 			'body'      => $body,

@@ -4,7 +4,7 @@ Tags: woocommerce, analytics, attribution, pixel, conversion tracking
 Requires at least: 6.0
 Tested up to: 6.8
 Requires PHP: 8.0
-Stable tag: 2.2.0
+Stable tag: 2.2.1
 WC requires at least: 7.0
 WC tested up to: 9.x
 License: GPLv2 or later
@@ -96,6 +96,12 @@ Plugin options (account ID, signing secret) are removed. Order metadata stamped 
 
 == Changelog ==
 
+= 2.2.1 =
+* **Fix (CRITICAL):** signing secret was passed to HMAC as its base64 string instead of the decoded raw bytes. Every signed request 401'd against the backend. The plugin now base64-decodes the stored secret to bytes before signing. This matches the backend's `account_signing_secrets.secret_b64` → raw-bytes-as-HMAC-key contract.
+* **Fix:** `MAGELLAN_API_BASE` now resolves from priority chain: `wp-config.php` constant → `magellan_api_base` option → default. `handle_configure` (Path A auto-install) persists `api_base` if the backend sends it. Trailing slashes are stripped on persist.
+* **New:** Path B manual-install bootstrap. Admin settings page now shows "Install with token" form when the signing secret is not yet stored. Plugin POSTs `{account_id, install_token}` to `MAGELLAN_API_BASE/bootstrap`, stores the returned signing secret + api_base, and surfaces typed error messages (unknown_token, expired_token, already_consumed, etc.). Path A auto-install remains the preferred flow.
+* **New:** "API base" row in the admin Status section so operators can verify which backend the plugin is talking to (and whether it came from the wp-config constant).
+
 = 2.2.0 =
 * Aligned with Magellan Truth Layer Backend Spec v1.0
 * **Fix:** verified event now fires on `woocommerce_order_status_processing` (not on `_created`). Avoids events for orders that never confirm (PromptPay timeouts, declined bank transfers).
@@ -116,6 +122,9 @@ Plugin options (account ID, signing secret) are removed. Order metadata stamped 
 * WooCommerce Blocks compatible
 
 == Upgrade Notice ==
+
+= 2.2.1 =
+CRITICAL fix: HMAC signing now matches backend contract (base64-decode the signing secret before signing). 2.2.0 installs cannot deliver verified events — upgrade required.
 
 = 2.2.0 =
 Aligns with Magellan backend Truth Layer v1.0. Fixes a critical issue where verified events were fired for orders that subsequently failed. Adds refund handling, multi-currency, and HMAC-signed requests.

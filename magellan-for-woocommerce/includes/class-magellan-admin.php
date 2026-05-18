@@ -21,16 +21,24 @@ class Magellan_Admin {
 
 	const OPT_ACCOUNT_ID     = 'magellan_account_id';
 	const OPT_SIGNING_SECRET = 'magellan_signing_secret';
+	const OPT_API_BASE       = 'magellan_api_base';
 	const OPT_CONFIGURED_AT  = 'magellan_configured_at';
 	const OPT_LAST_EVENT     = 'magellan_last_event_sent';
 	const OPT_LAST_ERROR     = 'magellan_last_error';
 	const OPT_HEALTH_DATA    = 'magellan_health_data';
+
+	// Install action constants (Path B manual bootstrap submission)
+	const NONCE_BOOTSTRAP_ACTION = 'magellan_bootstrap_submit';
+	const NONCE_BOOTSTRAP_FIELD  = '_magellan_bootstrap_nonce';
 
 	public static function init() {
 		add_action( 'admin_menu',     [ __CLASS__, 'add_menu' ] );
 		add_action( 'admin_init',     [ __CLASS__, 'register_settings' ] );
 		add_action( 'rest_api_init',  [ __CLASS__, 'register_rest_routes' ] );
 		add_action( 'admin_notices',  [ __CLASS__, 'maybe_notice' ] );
+
+		// Path B manual-install handler — admin-post.php form target
+		add_action( 'admin_post_' . self::NONCE_BOOTSTRAP_ACTION, [ __CLASS__, 'handle_bootstrap_submit' ] );
 	}
 
 	// -------------------------------------------------------------
@@ -43,6 +51,48 @@ class Magellan_Admin {
 
 	public static function get_signing_secret(): string {
 		return (string) get_option( self::OPT_SIGNING_SECRET, '' );
+	}
+
+	/**
+	 * Backend stores signing secrets as base64 of 32 random bytes (see
+	 * `account_signing_secrets.secret_b64`). HMAC verification on the
+	 * backend uses the DECODED raw bytes as the key. The plugin must do
+	 * the same — passing the base64 STRING to hash_hmac() would silently
+	 * produce a different signature and every request would 401.
+	 *
+	 * Returns the raw bytes, or '' if not configured / not decodable.
+	 */
+	public static function get_signing_secret_bytes(): string {
+		$b64 = self::get_signing_secret();
+		if ( $b64 === '' ) {
+			return '';
+		}
+		$bytes = base64_decode( $b64, true );
+		return $bytes === false ? '' : $bytes;
+	}
+
+	/**
+	 * Resolved API base URL (no trailing slash). Priority:
+	 *   1. wp-config.php constant `MAGELLAN_API_BASE` (highest — for
+	 *      staging / local overrides)
+	 *   2. Stored option `magellan_api_base` (set by Path A configure
+	 *      callback or Path B bootstrap response)
+	 *   3. Default `https://api.magellan.app/v1/pixel`
+	 *
+	 * The `MAGELLAN_API_BASE` constant defined in the main plugin file
+	 * already honors this priority chain. This helper is provided so
+	 * future callers can read it via the accessor without depending on
+	 * the constant being defined.
+	 */
+	public static function get_api_base(): string {
+		if ( defined( 'MAGELLAN_API_BASE' ) ) {
+			return rtrim( (string) MAGELLAN_API_BASE, '/' );
+		}
+		$opt = (string) get_option( self::OPT_API_BASE, '' );
+		if ( $opt !== '' ) {
+			return rtrim( $opt, '/' );
+		}
+		return 'https://api.magellan.app/v1/pixel';
 	}
 
 	public static function is_configured(): bool {
@@ -82,6 +132,7 @@ class Magellan_Admin {
 		$params     = $req->get_json_params();
 		$account_id = isset( $params['account_id'] ) ? (string) $params['account_id'] : '';
 		$secret     = isset( $params['signing_secret'] ) ? (string) $params['signing_secret'] : '';
+		$api_base   = isset( $params['api_base'] ) ? (string) $params['api_base'] : '';
 
 		if ( ! preg_match( '/^mgln_(live|test|dev)_[a-z2-7]{14}$/', $account_id ) ) {
 			return new WP_Error(
@@ -97,14 +148,34 @@ class Magellan_Admin {
 				[ 'status' => 400 ]
 			);
 		}
+		// Sanity: the secret must be base64-decodable and yield a
+		// reasonable key length (backend mints exactly 32 raw bytes →
+		// 44 base64 chars). If decode fails we still accept (defensive
+		// — backend may evolve secret encoding), but we log it so
+		// support has a paper trail when HMAC signatures are mismatched.
+		$decoded = base64_decode( $secret, true );
+		if ( $decoded === false || strlen( $decoded ) < 16 ) {
+			self::record_error( 'configure: signing_secret is not valid base64 of at least 16 bytes — verify backend contract.' );
+		}
 
 		update_option( self::OPT_ACCOUNT_ID,     $account_id );
 		update_option( self::OPT_SIGNING_SECRET, $secret );
 		update_option( self::OPT_CONFIGURED_AT,  time() );
 
+		// Persist api_base when supplied. The wp-config constant takes
+		// priority on read; the stored option is a fallback. Strip any
+		// trailing slash so concatenation with /event etc. is clean.
+		if ( $api_base !== '' ) {
+			$clean = rtrim( esc_url_raw( $api_base ), '/' );
+			if ( $clean !== '' ) {
+				update_option( self::OPT_API_BASE, $clean );
+			}
+		}
+
 		return new WP_REST_Response( [
 			'ok'           => true,
 			'account_id'   => $account_id,
+			'api_base'     => self::get_api_base(),
 			'plugin_ver'   => MAGELLAN_VERSION,
 			'wc_ver'       => defined( 'WC_VERSION' ) ? WC_VERSION : null,
 			'wp_ver'       => get_bloginfo( 'version' ),
@@ -122,6 +193,146 @@ class Magellan_Admin {
 			'configured_at'   => (int) get_option( self::OPT_CONFIGURED_AT, 0 ),
 			'last_event_at'   => (int) get_option( self::OPT_LAST_EVENT, 0 ),
 		], 200 );
+	}
+
+	// -------------------------------------------------------------
+	// Path B — manual bootstrap. Admin pastes Account ID + one-time
+	// install_token (issued from Magellan dashboard), plugin POSTs
+	// to MAGELLAN_API_BASE/bootstrap to retrieve signing_secret.
+	// -------------------------------------------------------------
+
+	/**
+	 * Form submission handler for the "Install with token" form. POSTs
+	 * `{account_id, install_token}` to MAGELLAN_API_BASE/bootstrap,
+	 * persists the returned signing_secret + api_base, and redirects
+	 * back to the settings page with a transient flash message.
+	 *
+	 * The bootstrap response is the only HTTP path through which the
+	 * plugin learns its signing secret on a fresh install. Backend
+	 * contract (spec §5.5):
+	 *   POST /bootstrap
+	 *     body:  { account_id, install_token }
+	 *     200:   { ok: true, account_id, signing_secret, api_base, received_at }
+	 *     401:   { ok: false, error: { code: 'unknown_account' | 'unknown_token'
+	 *              | 'expired_token' | 'already_consumed' | 'bad_install_token_format' } }
+	 */
+	public static function handle_bootstrap_submit(): void {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( 'Insufficient permissions.', 'Magellan', [ 'response' => 403 ] );
+		}
+		check_admin_referer( self::NONCE_BOOTSTRAP_ACTION, self::NONCE_BOOTSTRAP_FIELD );
+
+		$account_id    = isset( $_POST['account_id'] ) ? trim( (string) wp_unslash( $_POST['account_id'] ) ) : '';
+		$install_token = isset( $_POST['install_token'] ) ? trim( (string) wp_unslash( $_POST['install_token'] ) ) : '';
+
+		if ( ! preg_match( '/^mgln_(live|test|dev)_[a-z2-7]{14}$/', $account_id ) ) {
+			self::flash_bootstrap_result( 'error', 'Account ID format invalid. Expected mgln_(live|test|dev)_<14 base32 chars>.' );
+			self::redirect_back();
+		}
+		if ( $install_token === '' ) {
+			self::flash_bootstrap_result( 'error', 'Install token is required.' );
+			self::redirect_back();
+		}
+
+		$endpoint = self::get_api_base() . '/bootstrap';
+		$response = wp_remote_post( $endpoint, [
+			'body'      => wp_json_encode( [
+				'account_id'    => $account_id,
+				'install_token' => $install_token,
+			] ),
+			'headers'   => [
+				'Content-Type'              => 'application/json',
+				'X-Magellan-Plugin-Version' => MAGELLAN_VERSION,
+			],
+			'timeout'    => 15,
+			'user-agent' => 'MagellanWooPlugin/' . MAGELLAN_VERSION . ' WordPress/' . get_bloginfo( 'version' ) . ' PHP/' . PHP_VERSION,
+		] );
+
+		if ( is_wp_error( $response ) ) {
+			self::flash_bootstrap_result( 'error', 'Bootstrap request failed: ' . $response->get_error_message() );
+			self::redirect_back();
+		}
+
+		$code     = (int) wp_remote_retrieve_response_code( $response );
+		$body_raw = (string) wp_remote_retrieve_body( $response );
+		$body     = json_decode( $body_raw, true );
+
+		if ( $code !== 200 || ! is_array( $body ) || empty( $body['ok'] ) ) {
+			$err = is_array( $body ) && isset( $body['error']['code'] )
+				? (string) $body['error']['code']
+				: 'http_' . $code;
+			$friendly = self::friendly_bootstrap_error( $err );
+			self::flash_bootstrap_result( 'error', sprintf( 'Bootstrap failed: %s (%s).', $friendly, $err ) );
+			self::redirect_back();
+		}
+
+		$secret    = isset( $body['signing_secret'] ) ? (string) $body['signing_secret'] : '';
+		$api_base  = isset( $body['api_base'] )       ? (string) $body['api_base']       : '';
+		$echoed_id = isset( $body['account_id'] )     ? (string) $body['account_id']     : '';
+
+		if ( $secret === '' || strlen( $secret ) < 32 ) {
+			self::flash_bootstrap_result( 'error', 'Bootstrap response missing or short signing_secret.' );
+			self::redirect_back();
+		}
+		// Defence in depth: bootstrap should never echo a different ID
+		// than the one we sent (backend enforces this, but trust nothing).
+		if ( $echoed_id !== '' && $echoed_id !== $account_id ) {
+			self::flash_bootstrap_result( 'error', 'Bootstrap response account_id did not match submission. Aborting.' );
+			self::redirect_back();
+		}
+
+		update_option( self::OPT_ACCOUNT_ID,     $account_id );
+		update_option( self::OPT_SIGNING_SECRET, $secret );
+		update_option( self::OPT_CONFIGURED_AT,  time() );
+		if ( $api_base !== '' ) {
+			$clean = rtrim( esc_url_raw( $api_base ), '/' );
+			if ( $clean !== '' ) {
+				update_option( self::OPT_API_BASE, $clean );
+			}
+		}
+
+		self::flash_bootstrap_result( 'success', 'Connected. Signing secret stored — verified events will start sending on the next order.' );
+		self::redirect_back();
+	}
+
+	private static function friendly_bootstrap_error( string $code ): string {
+		switch ( $code ) {
+			case 'unknown_account':            return 'Account ID not recognized by Magellan';
+			case 'account_suspended':          return 'Truth Layer is disabled on this account';
+			case 'unknown_token':              return 'Install token not found';
+			case 'expired_token':              return 'Install token has expired — request a new one';
+			case 'already_consumed':           return 'Install token has already been used';
+			case 'bad_install_token_format':   return 'Install token format invalid';
+			case 'bad_account_format':         return 'Account ID format invalid';
+			case 'missing_account':            return 'Account ID missing';
+			case 'missing_install_token':      return 'Install token missing';
+			case 'invalid_json':               return 'Plugin sent malformed request body (bug — please report)';
+			case 'internal_error':             return 'Magellan internal error — retry in a moment';
+		}
+		return 'Unexpected response: ' . $code;
+	}
+
+	private static function flash_bootstrap_result( string $kind, string $message ): void {
+		set_transient(
+			'magellan_bootstrap_flash_' . get_current_user_id(),
+			[ 'kind' => $kind, 'message' => $message ],
+			60
+		);
+	}
+
+	public static function consume_bootstrap_flash(): ?array {
+		$key   = 'magellan_bootstrap_flash_' . get_current_user_id();
+		$flash = get_transient( $key );
+		if ( $flash ) {
+			delete_transient( $key );
+			return is_array( $flash ) ? $flash : null;
+		}
+		return null;
+	}
+
+	private static function redirect_back(): void {
+		wp_safe_redirect( admin_url( 'admin.php?page=magellan' ) );
+		exit;
 	}
 
 	// -------------------------------------------------------------
@@ -189,6 +400,8 @@ class Magellan_Admin {
 		$last_event   = (int) get_option( self::OPT_LAST_EVENT, 0 );
 		$last_error   = (array) get_option( self::OPT_LAST_ERROR, [] );
 		$configured_at = (int) get_option( self::OPT_CONFIGURED_AT, 0 );
+		$api_base     = self::get_api_base();
+		$flash        = self::consume_bootstrap_flash();
 		?>
 		<div class="wrap">
 			<h1 style="display:flex;align-items:center;gap:10px;">
@@ -202,6 +415,12 @@ class Magellan_Admin {
 
 			<?php settings_errors(); ?>
 
+			<?php if ( $flash ) : ?>
+				<div class="notice notice-<?php echo esc_attr( $flash['kind'] === 'success' ? 'success' : 'error' ); ?> is-dismissible">
+					<p><?php echo esc_html( $flash['message'] ); ?></p>
+				</div>
+			<?php endif; ?>
+
 			<?php if ( ! self::is_configured() ) : ?>
 				<div class="notice notice-warning inline">
 					<p>
@@ -209,6 +428,62 @@ class Magellan_Admin {
 						<a href="https://app.magellan.app/settings/connections" target="_blank" rel="noopener">Find it in Magellan &rarr; Settings &rarr; Connections</a>
 					</p>
 				</div>
+			<?php endif; ?>
+
+			<?php if ( ! $has_secret ) : ?>
+				<h2>Install with token (Path B)</h2>
+				<p class="description">
+					If your Magellan dashboard already installed this plugin for you via the WordPress Application Password flow (Path A),
+					you can skip this section &mdash; your credentials are already stored. Otherwise paste your one-time install token below.
+				</p>
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+					<input type="hidden" name="action" value="<?php echo esc_attr( self::NONCE_BOOTSTRAP_ACTION ); ?>" />
+					<?php wp_nonce_field( self::NONCE_BOOTSTRAP_ACTION, self::NONCE_BOOTSTRAP_FIELD ); ?>
+					<table class="form-table" role="presentation">
+						<tr>
+							<th scope="row">
+								<label for="mgln_bootstrap_account_id">Account ID</label>
+							</th>
+							<td>
+								<input
+									type="text"
+									id="mgln_bootstrap_account_id"
+									name="account_id"
+									value="<?php echo esc_attr( $account_id ); ?>"
+									class="regular-text code"
+									placeholder="mgln_live_xxxxxxxxxxxxxx"
+									autocomplete="off"
+									spellcheck="false"
+									required
+								/>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row">
+								<label for="mgln_bootstrap_install_token">Install token</label>
+							</th>
+							<td>
+								<input
+									type="text"
+									id="mgln_bootstrap_install_token"
+									name="install_token"
+									value=""
+									class="regular-text code"
+									placeholder="one-time token from Magellan dashboard"
+									autocomplete="off"
+									spellcheck="false"
+									required
+								/>
+								<p class="description">
+									Tokens are one-time use and expire after 24 hours. Generate a fresh one from
+									<a href="https://app.magellan.app/settings/connections" target="_blank" rel="noopener">Magellan &rarr; Settings &rarr; Connections</a>.
+								</p>
+							</td>
+						</tr>
+					</table>
+					<?php submit_button( 'Connect to Magellan', 'primary', 'submit', false ); ?>
+				</form>
+				<hr style="margin:24px 0;" />
 			<?php endif; ?>
 
 			<?php if ( ! empty( $conflicts ) ) : ?>
@@ -262,6 +537,15 @@ class Magellan_Admin {
 
 			<h2>Status</h2>
 			<table class="form-table" role="presentation">
+				<tr>
+					<th scope="row">API base</th>
+					<td>
+						<code><?php echo esc_html( $api_base ); ?></code>
+						<?php if ( defined( 'MAGELLAN_API_BASE' ) ) : ?>
+							<span class="description" style="margin-left:8px;">(from <code>MAGELLAN_API_BASE</code> constant)</span>
+						<?php endif; ?>
+					</td>
+				</tr>
 				<tr>
 					<th scope="row">Pixel</th>
 					<td>
