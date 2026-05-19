@@ -134,7 +134,7 @@ class Magellan_Admin {
 		$secret     = isset( $params['signing_secret'] ) ? (string) $params['signing_secret'] : '';
 		$api_base   = isset( $params['api_base'] ) ? (string) $params['api_base'] : '';
 
-		if ( ! preg_match( '/^mgln_(live|test|dev)_[a-z2-7]{14}$/', $account_id ) ) {
+		if ( ! preg_match( '/^mgln_(live|test|dev)_[a-km-np-z2-9]{14}$/', $account_id ) ) {
 			return new WP_Error(
 				'magellan_bad_account_id',
 				__( 'Invalid Account ID format. Expected mgln_(live|test|dev)_<14 base32 chars>.', 'magellan-for-woocommerce' ),
@@ -229,7 +229,7 @@ class Magellan_Admin {
 		$account_id    = isset( $_POST['account_id'] ) ? trim( (string) wp_unslash( $_POST['account_id'] ) ) : '';
 		$install_token = isset( $_POST['install_token'] ) ? trim( (string) wp_unslash( $_POST['install_token'] ) ) : '';
 
-		if ( ! preg_match( '/^mgln_(live|test|dev)_[a-z2-7]{14}$/', $account_id ) ) {
+		if ( ! preg_match( '/^mgln_(live|test|dev)_[a-km-np-z2-9]{14}$/', $account_id ) ) {
 			self::flash_bootstrap_result( 'error', __( 'Account ID format invalid. Expected mgln_(live|test|dev)_<14 base32 chars>.', 'magellan-for-woocommerce' ) );
 			self::redirect_back();
 		}
@@ -378,7 +378,7 @@ class Magellan_Admin {
 				'type'              => 'string',
 				'sanitize_callback' => function ( $value ) {
 					$value = trim( (string) $value );
-					if ( preg_match( '/^mgln_(live|test|dev)_[a-z2-7]{14}$/', $value ) ) {
+					if ( preg_match( '/^mgln_(live|test|dev)_[a-km-np-z2-9]{14}$/', $value ) ) {
 						return $value;
 					}
 					if ( $value === '' ) {

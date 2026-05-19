@@ -4,7 +4,7 @@ Tags: woocommerce, analytics, attribution, pixel, conversion tracking
 Requires at least: 6.0
 Tested up to: 6.8
 Requires PHP: 8.0
-Stable tag: 2.2.2
+Stable tag: 2.2.3
 WC requires at least: 7.0
 WC tested up to: 9.x
 License: GPLv2 or later
@@ -135,6 +135,10 @@ This plugin is designed to be compatible with consent-management workflows and P
 
 == Changelog ==
 
+= 2.2.3 =
+* **Fix (CRITICAL):** account_id validation regex now matches the backend's documented alphabet. The previous regex `[a-z2-7]` allowed `l` and `o` (which the backend never produces per Truth Layer spec §2.2's ambiguous-character exclusion) and excluded `8` and `9` (which the backend produces ~59% of the time). Result: most newly-minted account IDs failed validation, causing `/wp-json/magellan/v1/configure` to 400 with `magellan_bad_account_id`. Corrected to `[a-km-np-z2-9]` — same 32 chars as the backend's `abcdefghijkmnpqrstuvwxyz23456789` alphabet.
+* Three regex sites updated: REST configure handler, REST settings sanitize callback, admin-post bootstrap form handler.
+
 = 2.2.2 =
 * Added: LICENSE.txt (GPL-2.0+) bundled in plugin distribution.
 * Added: `External services` and `Privacy and GDPR` sections in readme — full disclosure of what data is sent to Magellan's API, when, and why.
@@ -170,6 +174,9 @@ This plugin is designed to be compatible with consent-management workflows and P
 * WooCommerce Blocks compatible
 
 == Upgrade Notice ==
+
+= 2.2.3 =
+CRITICAL: fixes account_id regex that rejected ~59% of valid backend-minted IDs (those containing `8` or `9`). Earlier 2.2.x installs would silently fail to configure via the auto-install flow. Upgrade required.
 
 = 2.2.2 =
 WordPress.org submission-ready release. Adds LICENSE.txt, full External Services and Privacy disclosure, and translation-ready strings. No behavior change vs 2.2.1.
