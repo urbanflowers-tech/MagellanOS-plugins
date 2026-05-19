@@ -137,14 +137,14 @@ class Magellan_Admin {
 		if ( ! preg_match( '/^mgln_(live|test|dev)_[a-z2-7]{14}$/', $account_id ) ) {
 			return new WP_Error(
 				'magellan_bad_account_id',
-				'Invalid Account ID format. Expected mgln_(live|test|dev)_<14 base32 chars>.',
+				__( 'Invalid Account ID format. Expected mgln_(live|test|dev)_<14 base32 chars>.', 'magellan-for-woocommerce' ),
 				[ 'status' => 400 ]
 			);
 		}
 		if ( strlen( $secret ) < 32 ) {
 			return new WP_Error(
 				'magellan_bad_secret',
-				'Signing secret too short. Minimum 32 chars.',
+				__( 'Signing secret too short. Minimum 32 chars.', 'magellan-for-woocommerce' ),
 				[ 'status' => 400 ]
 			);
 		}
@@ -155,7 +155,7 @@ class Magellan_Admin {
 		// support has a paper trail when HMAC signatures are mismatched.
 		$decoded = base64_decode( $secret, true );
 		if ( $decoded === false || strlen( $decoded ) < 16 ) {
-			self::record_error( 'configure: signing_secret is not valid base64 of at least 16 bytes — verify backend contract.' );
+			self::record_error( __( 'configure: signing_secret is not valid base64 of at least 16 bytes — verify backend contract.', 'magellan-for-woocommerce' ) );
 		}
 
 		update_option( self::OPT_ACCOUNT_ID,     $account_id );
@@ -218,7 +218,11 @@ class Magellan_Admin {
 	 */
 	public static function handle_bootstrap_submit(): void {
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_die( 'Insufficient permissions.', 'Magellan', [ 'response' => 403 ] );
+			wp_die(
+				esc_html__( 'Insufficient permissions.', 'magellan-for-woocommerce' ),
+				esc_html__( 'Magellan', 'magellan-for-woocommerce' ),
+				[ 'response' => 403 ]
+			);
 		}
 		check_admin_referer( self::NONCE_BOOTSTRAP_ACTION, self::NONCE_BOOTSTRAP_FIELD );
 
@@ -226,11 +230,11 @@ class Magellan_Admin {
 		$install_token = isset( $_POST['install_token'] ) ? trim( (string) wp_unslash( $_POST['install_token'] ) ) : '';
 
 		if ( ! preg_match( '/^mgln_(live|test|dev)_[a-z2-7]{14}$/', $account_id ) ) {
-			self::flash_bootstrap_result( 'error', 'Account ID format invalid. Expected mgln_(live|test|dev)_<14 base32 chars>.' );
+			self::flash_bootstrap_result( 'error', __( 'Account ID format invalid. Expected mgln_(live|test|dev)_<14 base32 chars>.', 'magellan-for-woocommerce' ) );
 			self::redirect_back();
 		}
 		if ( $install_token === '' ) {
-			self::flash_bootstrap_result( 'error', 'Install token is required.' );
+			self::flash_bootstrap_result( 'error', __( 'Install token is required.', 'magellan-for-woocommerce' ) );
 			self::redirect_back();
 		}
 
@@ -249,7 +253,14 @@ class Magellan_Admin {
 		] );
 
 		if ( is_wp_error( $response ) ) {
-			self::flash_bootstrap_result( 'error', 'Bootstrap request failed: ' . $response->get_error_message() );
+			self::flash_bootstrap_result(
+				'error',
+				sprintf(
+					/* translators: %s: error message from the HTTP layer */
+					__( 'Bootstrap request failed: %s', 'magellan-for-woocommerce' ),
+					$response->get_error_message()
+				)
+			);
 			self::redirect_back();
 		}
 
@@ -262,7 +273,15 @@ class Magellan_Admin {
 				? (string) $body['error']['code']
 				: 'http_' . $code;
 			$friendly = self::friendly_bootstrap_error( $err );
-			self::flash_bootstrap_result( 'error', sprintf( 'Bootstrap failed: %s (%s).', $friendly, $err ) );
+			self::flash_bootstrap_result(
+				'error',
+				sprintf(
+					/* translators: 1: human-readable error reason, 2: machine error code from the API */
+					__( 'Bootstrap failed: %1$s (%2$s).', 'magellan-for-woocommerce' ),
+					$friendly,
+					$err
+				)
+			);
 			self::redirect_back();
 		}
 
@@ -271,13 +290,13 @@ class Magellan_Admin {
 		$echoed_id = isset( $body['account_id'] )     ? (string) $body['account_id']     : '';
 
 		if ( $secret === '' || strlen( $secret ) < 32 ) {
-			self::flash_bootstrap_result( 'error', 'Bootstrap response missing or short signing_secret.' );
+			self::flash_bootstrap_result( 'error', __( 'Bootstrap response missing or short signing_secret.', 'magellan-for-woocommerce' ) );
 			self::redirect_back();
 		}
 		// Defence in depth: bootstrap should never echo a different ID
 		// than the one we sent (backend enforces this, but trust nothing).
 		if ( $echoed_id !== '' && $echoed_id !== $account_id ) {
-			self::flash_bootstrap_result( 'error', 'Bootstrap response account_id did not match submission. Aborting.' );
+			self::flash_bootstrap_result( 'error', __( 'Bootstrap response account_id did not match submission. Aborting.', 'magellan-for-woocommerce' ) );
 			self::redirect_back();
 		}
 
@@ -291,25 +310,26 @@ class Magellan_Admin {
 			}
 		}
 
-		self::flash_bootstrap_result( 'success', 'Connected. Signing secret stored — verified events will start sending on the next order.' );
+		self::flash_bootstrap_result( 'success', __( 'Connected. Signing secret stored — verified events will start sending on the next order.', 'magellan-for-woocommerce' ) );
 		self::redirect_back();
 	}
 
 	private static function friendly_bootstrap_error( string $code ): string {
 		switch ( $code ) {
-			case 'unknown_account':            return 'Account ID not recognized by Magellan';
-			case 'account_suspended':          return 'Truth Layer is disabled on this account';
-			case 'unknown_token':              return 'Install token not found';
-			case 'expired_token':              return 'Install token has expired — request a new one';
-			case 'already_consumed':           return 'Install token has already been used';
-			case 'bad_install_token_format':   return 'Install token format invalid';
-			case 'bad_account_format':         return 'Account ID format invalid';
-			case 'missing_account':            return 'Account ID missing';
-			case 'missing_install_token':      return 'Install token missing';
-			case 'invalid_json':               return 'Plugin sent malformed request body (bug — please report)';
-			case 'internal_error':             return 'Magellan internal error — retry in a moment';
+			case 'unknown_account':            return __( 'Account ID not recognized by Magellan', 'magellan-for-woocommerce' );
+			case 'account_suspended':          return __( 'Truth Layer is disabled on this account', 'magellan-for-woocommerce' );
+			case 'unknown_token':              return __( 'Install token not found', 'magellan-for-woocommerce' );
+			case 'expired_token':              return __( 'Install token has expired — request a new one', 'magellan-for-woocommerce' );
+			case 'already_consumed':           return __( 'Install token has already been used', 'magellan-for-woocommerce' );
+			case 'bad_install_token_format':   return __( 'Install token format invalid', 'magellan-for-woocommerce' );
+			case 'bad_account_format':         return __( 'Account ID format invalid', 'magellan-for-woocommerce' );
+			case 'missing_account':            return __( 'Account ID missing', 'magellan-for-woocommerce' );
+			case 'missing_install_token':      return __( 'Install token missing', 'magellan-for-woocommerce' );
+			case 'invalid_json':               return __( 'Plugin sent malformed request body (bug — please report)', 'magellan-for-woocommerce' );
+			case 'internal_error':             return __( 'Magellan internal error — retry in a moment', 'magellan-for-woocommerce' );
 		}
-		return 'Unexpected response: ' . $code;
+		/* translators: %s: untranslated error code returned by the API */
+		return sprintf( __( 'Unexpected response: %s', 'magellan-for-woocommerce' ), $code );
 	}
 
 	private static function flash_bootstrap_result( string $kind, string $message ): void {
@@ -342,8 +362,8 @@ class Magellan_Admin {
 	public static function add_menu() {
 		add_submenu_page(
 			'woocommerce',
-			'Magellan',
-			'Magellan',
+			__( 'Magellan', 'magellan-for-woocommerce' ),
+			__( 'Magellan', 'magellan-for-woocommerce' ),
 			'manage_options',
 			'magellan',
 			[ __CLASS__, 'render_page' ]
@@ -367,7 +387,7 @@ class Magellan_Admin {
 					add_settings_error(
 						self::OPT_ACCOUNT_ID,
 						'magellan_bad_id',
-						'Account ID format invalid. Expected mgln_(live|test|dev)_<14 base32 chars>.',
+						__( 'Account ID format invalid. Expected mgln_(live|test|dev)_<14 base32 chars>.', 'magellan-for-woocommerce' ),
 						'error'
 					);
 					return get_option( self::OPT_ACCOUNT_ID, '' );
@@ -384,7 +404,13 @@ class Magellan_Admin {
 		}
 		if ( ! self::is_configured() && current_user_can( 'manage_options' ) ) {
 			$url = admin_url( 'admin.php?page=magellan' );
-			echo '<div class="notice notice-info is-dismissible"><p><strong>Magellan</strong> &mdash; enter your Account ID to activate the verified attribution pixel. <a href="' . esc_url( $url ) . '">Set it up &rarr;</a></p></div>';
+			printf(
+				'<div class="notice notice-info is-dismissible"><p><strong>%1$s</strong> &mdash; %2$s <a href="%3$s">%4$s &rarr;</a></p></div>',
+				esc_html__( 'Magellan', 'magellan-for-woocommerce' ),
+				esc_html__( 'enter your Account ID to activate the verified attribution pixel.', 'magellan-for-woocommerce' ),
+				esc_url( $url ),
+				esc_html__( 'Set it up', 'magellan-for-woocommerce' )
+			);
 		}
 	}
 
@@ -410,7 +436,7 @@ class Magellan_Admin {
 					<line x1="10" y1="10" x2="10" y2="16" stroke="#0d1f3c" stroke-width="1.5"/>
 					<line x1="8" y1="13" x2="12" y2="13" stroke="#0d1f3c" stroke-width="1.5"/>
 				</svg>
-				Magellan for WooCommerce
+				<?php echo esc_html__( 'Magellan for WooCommerce', 'magellan-for-woocommerce' ); ?>
 			</h1>
 
 			<?php settings_errors(); ?>
@@ -424,17 +450,18 @@ class Magellan_Admin {
 			<?php if ( ! self::is_configured() ) : ?>
 				<div class="notice notice-warning inline">
 					<p>
-						Enter your Magellan Account ID to activate the verified attribution pixel.
-						<a href="https://app.magellan.app/settings/connections" target="_blank" rel="noopener">Find it in Magellan &rarr; Settings &rarr; Connections</a>
+						<?php echo esc_html__( 'Enter your Magellan Account ID to activate the verified attribution pixel.', 'magellan-for-woocommerce' ); ?>
+						<a href="https://app.magellan.app/settings/connections" target="_blank" rel="noopener">
+							<?php echo esc_html__( 'Find it in Magellan → Settings → Connections', 'magellan-for-woocommerce' ); ?>
+						</a>
 					</p>
 				</div>
 			<?php endif; ?>
 
 			<?php if ( ! $has_secret ) : ?>
-				<h2>Install with token (Path B)</h2>
+				<h2><?php echo esc_html__( 'Install with token (Path B)', 'magellan-for-woocommerce' ); ?></h2>
 				<p class="description">
-					If your Magellan dashboard already installed this plugin for you via the WordPress Application Password flow (Path A),
-					you can skip this section &mdash; your credentials are already stored. Otherwise paste your one-time install token below.
+					<?php echo esc_html__( 'If your Magellan dashboard already installed this plugin for you via the WordPress Application Password flow (Path A), you can skip this section — your credentials are already stored. Otherwise paste your one-time install token below.', 'magellan-for-woocommerce' ); ?>
 				</p>
 				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 					<input type="hidden" name="action" value="<?php echo esc_attr( self::NONCE_BOOTSTRAP_ACTION ); ?>" />
@@ -442,7 +469,7 @@ class Magellan_Admin {
 					<table class="form-table" role="presentation">
 						<tr>
 							<th scope="row">
-								<label for="mgln_bootstrap_account_id">Account ID</label>
+								<label for="mgln_bootstrap_account_id"><?php echo esc_html__( 'Account ID', 'magellan-for-woocommerce' ); ?></label>
 							</th>
 							<td>
 								<input
@@ -460,7 +487,7 @@ class Magellan_Admin {
 						</tr>
 						<tr>
 							<th scope="row">
-								<label for="mgln_bootstrap_install_token">Install token</label>
+								<label for="mgln_bootstrap_install_token"><?php echo esc_html__( 'Install token', 'magellan-for-woocommerce' ); ?></label>
 							</th>
 							<td>
 								<input
@@ -469,19 +496,21 @@ class Magellan_Admin {
 									name="install_token"
 									value=""
 									class="regular-text code"
-									placeholder="one-time token from Magellan dashboard"
+									placeholder="<?php echo esc_attr__( 'one-time token from Magellan dashboard', 'magellan-for-woocommerce' ); ?>"
 									autocomplete="off"
 									spellcheck="false"
 									required
 								/>
 								<p class="description">
-									Tokens are one-time use and expire after 24 hours. Generate a fresh one from
-									<a href="https://app.magellan.app/settings/connections" target="_blank" rel="noopener">Magellan &rarr; Settings &rarr; Connections</a>.
+									<?php echo esc_html__( 'Tokens are one-time use and expire after 24 hours. Generate a fresh one from', 'magellan-for-woocommerce' ); ?>
+									<a href="https://app.magellan.app/settings/connections" target="_blank" rel="noopener">
+										<?php echo esc_html__( 'Magellan → Settings → Connections', 'magellan-for-woocommerce' ); ?>
+									</a>.
 								</p>
 							</td>
 						</tr>
 					</table>
-					<?php submit_button( 'Connect to Magellan', 'primary', 'submit', false ); ?>
+					<?php submit_button( __( 'Connect to Magellan', 'magellan-for-woocommerce' ), 'primary', 'submit', false ); ?>
 				</form>
 				<hr style="margin:24px 0;" />
 			<?php endif; ?>
@@ -489,10 +518,10 @@ class Magellan_Admin {
 			<?php if ( ! empty( $conflicts ) ) : ?>
 				<div class="notice notice-error inline">
 					<p>
-						<strong>Tracking conflict detected:</strong>
-						<?php echo esc_html( $conflicts[0]['plugin'] ?? 'Unknown plugin' ); ?>
+						<strong><?php echo esc_html__( 'Tracking conflict detected:', 'magellan-for-woocommerce' ); ?></strong>
+						<?php echo esc_html( $conflicts[0]['plugin'] ?? __( 'Unknown plugin', 'magellan-for-woocommerce' ) ); ?>
 						&mdash;
-						<?php echo esc_html( $conflicts[0]['note'] ?? 'See Magellan dashboard.' ); ?>
+						<?php echo esc_html( $conflicts[0]['note'] ?? __( 'See Magellan dashboard.', 'magellan-for-woocommerce' ) ); ?>
 					</p>
 				</div>
 			<?php endif; ?>
@@ -500,9 +529,15 @@ class Magellan_Admin {
 			<?php if ( ! empty( $last_error['message'] ) ) : ?>
 				<div class="notice notice-error inline">
 					<p>
-						<strong>Last error:</strong>
+						<strong><?php echo esc_html__( 'Last error:', 'magellan-for-woocommerce' ); ?></strong>
 						<?php echo esc_html( $last_error['message'] ); ?>
-						(<?php echo esc_html( human_time_diff( (int) $last_error['time'], time() ) ); ?> ago)
+						<?php
+						printf(
+							/* translators: %s: human-readable time difference, e.g. "5 minutes" */
+							' (' . esc_html__( '%s ago', 'magellan-for-woocommerce' ) . ')',
+							esc_html( human_time_diff( (int) $last_error['time'], time() ) )
+						);
+						?>
 					</p>
 				</div>
 			<?php endif; ?>
@@ -512,7 +547,7 @@ class Magellan_Admin {
 				<table class="form-table" role="presentation">
 					<tr>
 						<th scope="row">
-							<label for="magellan_account_id">Magellan Account ID</label>
+							<label for="magellan_account_id"><?php echo esc_html__( 'Magellan Account ID', 'magellan-for-woocommerce' ); ?></label>
 						</th>
 						<td>
 							<input
@@ -526,82 +561,104 @@ class Magellan_Admin {
 								spellcheck="false"
 							/>
 							<p class="description">
-								24-character identifier. Find this in
-								<a href="https://app.magellan.app/settings/connections" target="_blank" rel="noopener">Magellan &rarr; Settings &rarr; Connections</a>.
+								<?php echo esc_html__( '24-character identifier. Find this in', 'magellan-for-woocommerce' ); ?>
+								<a href="https://app.magellan.app/settings/connections" target="_blank" rel="noopener">
+									<?php echo esc_html__( 'Magellan → Settings → Connections', 'magellan-for-woocommerce' ); ?>
+								</a>.
 							</p>
 						</td>
 					</tr>
 				</table>
-				<?php submit_button( 'Save Account ID' ); ?>
+				<?php submit_button( __( 'Save Account ID', 'magellan-for-woocommerce' ) ); ?>
 			</form>
 
-			<h2>Status</h2>
+			<h2><?php echo esc_html__( 'Status', 'magellan-for-woocommerce' ); ?></h2>
 			<table class="form-table" role="presentation">
 				<tr>
-					<th scope="row">API base</th>
+					<th scope="row"><?php echo esc_html__( 'API base', 'magellan-for-woocommerce' ); ?></th>
 					<td>
 						<code><?php echo esc_html( $api_base ); ?></code>
 						<?php if ( defined( 'MAGELLAN_API_BASE' ) ) : ?>
-							<span class="description" style="margin-left:8px;">(from <code>MAGELLAN_API_BASE</code> constant)</span>
+							<span class="description" style="margin-left:8px;">
+								<?php echo esc_html__( '(from MAGELLAN_API_BASE constant)', 'magellan-for-woocommerce' ); ?>
+							</span>
 						<?php endif; ?>
 					</td>
 				</tr>
 				<tr>
-					<th scope="row">Pixel</th>
+					<th scope="row"><?php echo esc_html__( 'Pixel', 'magellan-for-woocommerce' ); ?></th>
 					<td>
 						<?php if ( self::is_configured() ) : ?>
-							<span style="color:#057a55;font-weight:600;">&#10003; Active</span>
+							<span style="color:#057a55;font-weight:600;">&#10003; <?php echo esc_html__( 'Active', 'magellan-for-woocommerce' ); ?></span>
 						<?php elseif ( $account_id !== '' ) : ?>
-							<span style="color:#b45309;font-weight:600;">&#9888; Account ID set, signing secret missing &mdash; reconnect from Magellan dashboard</span>
+							<span style="color:#b45309;font-weight:600;">&#9888; <?php echo esc_html__( 'Account ID set, signing secret missing — reconnect from Magellan dashboard', 'magellan-for-woocommerce' ); ?></span>
 						<?php else : ?>
-							<span style="color:#b45309;font-weight:600;">&#9888; Not configured</span>
+							<span style="color:#b45309;font-weight:600;">&#9888; <?php echo esc_html__( 'Not configured', 'magellan-for-woocommerce' ); ?></span>
 						<?php endif; ?>
 					</td>
 				</tr>
 				<?php if ( $configured_at ) : ?>
 				<tr>
-					<th scope="row">Configured</th>
-					<td><?php echo esc_html( human_time_diff( $configured_at, time() ) ); ?> ago</td>
+					<th scope="row"><?php echo esc_html__( 'Configured', 'magellan-for-woocommerce' ); ?></th>
+					<td>
+						<?php
+						printf(
+							/* translators: %s: human-readable time difference, e.g. "5 minutes" */
+							esc_html__( '%s ago', 'magellan-for-woocommerce' ),
+							esc_html( human_time_diff( $configured_at, time() ) )
+						);
+						?>
+					</td>
 				</tr>
 				<?php endif; ?>
 				<?php if ( $last_event ) : ?>
 				<tr>
-					<th scope="row">Last verified event sent</th>
-					<td><?php echo esc_html( human_time_diff( $last_event, time() ) ); ?> ago</td>
+					<th scope="row"><?php echo esc_html__( 'Last verified event sent', 'magellan-for-woocommerce' ); ?></th>
+					<td>
+						<?php
+						printf(
+							/* translators: %s: human-readable time difference, e.g. "5 minutes" */
+							esc_html__( '%s ago', 'magellan-for-woocommerce' ),
+							esc_html( human_time_diff( $last_event, time() ) )
+						);
+						?>
+					</td>
 				</tr>
 				<?php endif; ?>
 				<tr>
-					<th scope="row">Action Scheduler</th>
+					<th scope="row"><?php echo esc_html__( 'Action Scheduler', 'magellan-for-woocommerce' ); ?></th>
 					<td>
 						<?php if ( function_exists( 'as_schedule_single_action' ) ) : ?>
-							<span style="color:#057a55;font-weight:600;">&#10003; Available</span>
+							<span style="color:#057a55;font-weight:600;">&#10003; <?php echo esc_html__( 'Available', 'magellan-for-woocommerce' ); ?></span>
 						<?php else : ?>
-							<span style="color:#b45309;font-weight:600;">&#9888; Not available &mdash; using WP-Cron fallback</span>
+							<span style="color:#b45309;font-weight:600;">&#9888; <?php echo esc_html__( 'Not available — using WP-Cron fallback', 'magellan-for-woocommerce' ); ?></span>
 						<?php endif; ?>
 					</td>
 				</tr>
 				<tr>
-					<th scope="row">HPOS</th>
+					<th scope="row"><?php echo esc_html__( 'HPOS', 'magellan-for-woocommerce' ); ?></th>
 					<td>
 						<?php
 						$hpos_enabled = class_exists( '\Automattic\WooCommerce\Utilities\OrderUtil' )
 							&& \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled();
-						echo $hpos_enabled
-							? '<span style="color:#057a55;font-weight:600;">&#10003; Enabled</span>'
-							: '<span>Disabled</span>';
+						if ( $hpos_enabled ) {
+							echo '<span style="color:#057a55;font-weight:600;">&#10003; ' . esc_html__( 'Enabled', 'magellan-for-woocommerce' ) . '</span>';
+						} else {
+							echo '<span>' . esc_html__( 'Disabled', 'magellan-for-woocommerce' ) . '</span>';
+						}
 						?>
 					</td>
 				</tr>
 				<?php if ( ! empty( $health['plugin_status']['events_sent_24h'] ) ) : ?>
 				<tr>
-					<th scope="row">Events sent (24h)</th>
+					<th scope="row"><?php echo esc_html__( 'Events sent (24h)', 'magellan-for-woocommerce' ); ?></th>
 					<td><?php echo (int) $health['plugin_status']['events_sent_24h']; ?></td>
 				</tr>
 				<?php endif; ?>
 			</table>
 
 			<p class="description" style="margin-top:24px;color:#666;">
-				All ad-platform credentials (Meta, Google, TikTok, Klaviyo) live in Magellan, not in WordPress. This plugin sends only verified order events.
+				<?php echo esc_html__( 'All ad-platform credentials (Meta, Google, TikTok, Klaviyo) live in Magellan, not in WordPress. This plugin sends only verified order events.', 'magellan-for-woocommerce' ); ?>
 			</p>
 		</div>
 		<?php

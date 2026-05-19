@@ -3,7 +3,7 @@
  * Plugin Name:       Magellan for WooCommerce
  * Plugin URI:        https://magellan.app
  * Description:       First-party attribution pixel for Magellan. Captures verified purchase data and sends it to Magellan for cross-platform attribution and overclaim detection.
- * Version:           2.2.1
+ * Version:           2.2.2
  * Author:            Magellan
  * Author URI:        https://magellan.app
  * License:           GPL-2.0+
@@ -11,6 +11,7 @@
  * Requires at least: 6.0
  * Requires PHP:      8.0
  * Text Domain:       magellan-for-woocommerce
+ * Domain Path:       /languages
  * WC requires at least: 7.0
  * WC tested up to:   9.x
  *
@@ -25,7 +26,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 // Constants
 // ---------------------------------------------------------------------
 
-define( 'MAGELLAN_VERSION',            '2.2.1' );
+define( 'MAGELLAN_VERSION',            '2.2.2' );
 define( 'MAGELLAN_PLUGIN_FILE',        __FILE__ );
 define( 'MAGELLAN_PLUGIN_DIR',         plugin_dir_path( __FILE__ ) );
 define( 'MAGELLAN_PLUGIN_URL',         plugin_dir_url( __FILE__ ) );
@@ -80,11 +81,21 @@ add_action(
 add_action(
 	'plugins_loaded',
 	function () {
+		// Load translations. Domain Path /languages — falls back to WP's
+		// global language pack location if no in-plugin .mo files ship.
+		load_plugin_textdomain(
+			'magellan-for-woocommerce',
+			false,
+			dirname( plugin_basename( MAGELLAN_PLUGIN_FILE ) ) . '/languages'
+		);
+
 		if ( ! class_exists( 'WooCommerce' ) ) {
 			add_action(
 				'admin_notices',
 				function () {
-					echo '<div class="notice notice-error"><p><strong>Magellan for WooCommerce</strong> requires WooCommerce to be installed and active.</p></div>';
+					echo '<div class="notice notice-error"><p>';
+					echo esc_html__( 'Magellan for WooCommerce requires WooCommerce to be installed and active.', 'magellan-for-woocommerce' );
+					echo '</p></div>';
 				}
 			);
 			return;
