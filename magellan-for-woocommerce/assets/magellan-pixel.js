@@ -196,9 +196,19 @@
 		writeCookie(COOKIE, encoded);
 	}
 
-	// Expose minimal API for other scripts (checkout email capture)
+	// Expose minimal API for other scripts (checkout email capture).
+	// Version is read from the meta tag the plugin injects so we don't
+	// have to bump this string on every release.
+	function readPluginVersion() {
+		var el = document.querySelector('meta[name="magellan-account"]');
+		// Plugin version isn't published in a meta tag today — emit
+		// 'unknown' as a forward-compatible placeholder. Consumers that
+		// need a hard version should rely on the script's URL ?ver= param
+		// that WordPress adds via wp_enqueue_script.
+		return el ? 'enqueued' : 'unknown';
+	}
 	window.Magellan = {
-		v: '2.2.0',
+		v: readPluginVersion(),
 		getCookie: function () { return data; }
 	};
 })();

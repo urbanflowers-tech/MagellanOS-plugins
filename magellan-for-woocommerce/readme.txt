@@ -4,7 +4,7 @@ Tags: woocommerce, analytics, attribution, pixel, conversion tracking
 Requires at least: 6.0
 Tested up to: 6.8
 Requires PHP: 8.0
-Stable tag: 2.2.1
+Stable tag: 2.2.2
 WC requires at least: 7.0
 WC tested up to: 9.x
 License: GPLv2 or later
@@ -94,7 +94,55 @@ Plugin options (account ID, signing secret) are removed. Order metadata stamped 
 3. Tracking Health report in Magellan Data department
 4. Customer lifetime journey map built from plugin attribution data
 
+== External services ==
+
+This plugin connects to **Magellan's API** (default: https://api.magellan.app) to deliver verified attribution data for your WooCommerce orders. The destination is configurable via the `MAGELLAN_API_BASE` constant in `wp-config.php` or set automatically during the Magellan dashboard install flow.
+
+**What data is sent, when, and why:**
+
+* **Order events** — sent when a WooCommerce order moves to `processing` or `completed` status (delayed ~10 seconds via Action Scheduler). Payload includes: order ID, order number, currency, totals (subtotal, shipping, tax, discount, total), line items (SKU, name, quantity, unit price, line total), the order's hashed customer email (SHA-256, never raw), hashed phone (SHA-256, country-aware E.164 normalization, never raw), attribution touches (UTM source/medium/campaign, click IDs such as fbclid/gclid/ttclid, session count, first-touch landing URL, referrer), customer IP address, and User-Agent. Purpose: Magellan cross-references this against what Meta / Google / TikTok / Klaviyo claim, then surfaces overclaim and lets the Conversions API send only the verified events.
+* **Refund / cancellation events** — sent when WooCommerce records a refund or cancels an order that previously sent a verified event. Payload includes refund amount + reason (or cancellation flag), original event ID, hashed identity, currency, and total. Purpose: keep ad-platform conversion counts honest as refunds happen.
+* **Cart email capture** — when a shopper types an email into the WooCommerce checkout, the plugin's frontend JS hashes the email (SHA-256, client-side) and POSTs `{cart_token, identity.email_hash, attribution, cart}` to a local plugin REST endpoint, which signs and forwards to Magellan. Rate-limited to 10 requests per IP per minute. Purpose: abandoned-cart attribution and remarketing tied to verified opt-in.
+* **Identity batch** — once on plugin activation (and on demand thereafter), the plugin sends a batched list of historical customer identities: hashed email + hashed phone + first/last seen timestamp + order count + external customer ID. Sent in chunks of 500. Purpose: backfill cross-store identity matching for already-completed orders.
+* **Tracking Health report** — once per day (and immediately on plugin activation / deactivation of other plugins) the plugin sends a non-sensitive site profile: WordPress / WooCommerce / PHP versions, HPOS status, checkout type, active theme name, site locale, multisite flag, site URL, count of events sent in the last 24h, a list of conflicting tracking plugins detected by file path, and the slug of any consent or cache plugin detected. Purpose: warn the operator when a duplicate Meta Pixel or GTM container would otherwise cause double-counting.
+
+**What this plugin does NOT send:**
+
+* Raw email addresses or phone numbers (always SHA-256 hashed first)
+* Payment method details, card numbers, or any financial credentials
+* Shopper passwords, session cookies, or login tokens
+* Product images or descriptions
+* Comments, reviews, or any blog/CMS content
+* Customer addresses
+* WordPress user accounts other than their email hash (used as a stable customer identifier)
+
+**Magellan privacy + terms:**
+
+* Privacy policy: https://magellan.app/privacy
+* Terms of service: https://magellan.app/terms
+
+Use of this plugin requires a Magellan account. Site operators are responsible for disclosing this data flow in their own site's privacy policy and obtaining any consent required by their jurisdiction (GDPR, CCPA, PDPA, etc.). The plugin respects the `magellan_tracking_enabled` filter so consent-management plugins can suppress all data flow when a visitor has not consented.
+
+== Privacy and GDPR ==
+
+This plugin is designed to be compatible with consent-management workflows and PII-minimization policies:
+
+* **No raw PII leaves WordPress.** Email and phone are SHA-256 hashed (with country-aware E.164 normalization for phone) before any transmission. Magellan stores only the hashes.
+* **No browser fingerprinting.** The plugin's first-party pixel sets a single cookie (`_mgln`, 180-day TTL, SameSite=Lax) carrying UTM parameters, click IDs (fbclid, gclid, gbraid, wbraid, ttclid, msclkid, twclid), referrer, and session count. No canvas fingerprinting, no device enumeration, no third-party cookies.
+* **Consent integration.** Apply the `magellan_tracking_enabled` filter (return `false` from your consent-management plugin) to suppress the pixel and skip all server-side event sending until consent is granted. Apply the `magellan_consent_state` filter to record consent state (`granted` / `denied` / `unknown`) on each outbound event.
+* **Right to erasure.** The plugin honors WordPress's `Personal_Data_Eraser` hooks. Hashed identity data tied to a specific order is removed via the standard WP privacy tools.
+* **Data residency.** Magellan's API runs in regions disclosed at https://magellan.app/data-residency.
+
 == Changelog ==
+
+= 2.2.2 =
+* Added: LICENSE.txt (GPL-2.0+) bundled in plugin distribution.
+* Added: `External services` and `Privacy and GDPR` sections in readme — full disclosure of what data is sent to Magellan's API, when, and why.
+* Improved: all user-facing strings wrapped in `__()` / `esc_html__()` and `load_plugin_textdomain` registered. Plugin is now translation-ready.
+* Fixed: pixel JS no longer hard-codes plugin version (was reporting stale `2.2.0`); reads from the enqueued script's WP-injected `?ver=` parameter instead.
+* Internal: WordPress.org coding standards review pass — output escaping audit, nonce / capability check audit, sanitize/escape symmetry on all REST and admin-post handlers.
+
+= 2.2.1 =
 
 = 2.2.1 =
 * **Fix (CRITICAL):** signing secret was passed to HMAC as its base64 string instead of the decoded raw bytes. Every signed request 401'd against the backend. The plugin now base64-decodes the stored secret to bytes before signing. This matches the backend's `account_signing_secrets.secret_b64` → raw-bytes-as-HMAC-key contract.
@@ -122,6 +170,9 @@ Plugin options (account ID, signing secret) are removed. Order metadata stamped 
 * WooCommerce Blocks compatible
 
 == Upgrade Notice ==
+
+= 2.2.2 =
+WordPress.org submission-ready release. Adds LICENSE.txt, full External Services and Privacy disclosure, and translation-ready strings. No behavior change vs 2.2.1.
 
 = 2.2.1 =
 CRITICAL fix: HMAC signing now matches backend contract (base64-decode the signing secret before signing). 2.2.0 installs cannot deliver verified events — upgrade required.

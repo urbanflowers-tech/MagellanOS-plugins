@@ -363,9 +363,15 @@ class Magellan_Sender {
 		] );
 
 		if ( is_wp_error( $response ) ) {
-			Magellan_Admin::record_error( 'Dispatch failed: ' . $response->get_error_message() );
+			Magellan_Admin::record_error(
+				sprintf(
+					/* translators: %s: error message from the HTTP layer */
+					__( 'Dispatch failed: %s', 'magellan-for-woocommerce' ),
+					$response->get_error_message()
+				)
+			);
 			// Throw so Action Scheduler retries
-			throw new \Exception( 'Magellan dispatch failed: ' . $response->get_error_message() );
+			throw new \Exception( 'Magellan dispatch failed: ' . esc_html( $response->get_error_message() ) );
 		}
 
 		$code = wp_remote_retrieve_response_code( $response );
@@ -378,7 +384,8 @@ class Magellan_Sender {
 		// Terminal errors — do not retry
 		if ( in_array( $code, [ 400, 401, 403, 410 ], true ) ) {
 			$msg = sprintf(
-				'Terminal %d on %s. Check Magellan dashboard / reconnect.',
+				/* translators: 1: HTTP status code, 2: API path */
+				__( 'Terminal %1$d on %2$s. Check Magellan dashboard / reconnect.', 'magellan-for-woocommerce' ),
 				$code,
 				wp_parse_url( $endpoint, PHP_URL_PATH )
 			);
