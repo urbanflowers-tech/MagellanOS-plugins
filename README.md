@@ -7,7 +7,8 @@ verification for e-commerce platforms.
 
 | Plugin | Platform | Version | Status |
 |---|---|---|---|
-| [magellan-for-woocommerce](./magellan-for-woocommerce/) | WooCommerce (WordPress 6.0+, WC 7.0+) | 2.2.0 | Pre-release — staging pilot |
+| [magellan-for-woocommerce](./magellan-for-woocommerce/) | WooCommerce (WordPress 6.0+, WC 7.0+) | 2.2.2 | wordpress.org submission-ready |
+| [magellan-staging-installer](./magellan-staging-installer/) | WordPress 6.0+ — **internal staging only** | 1.0.0 | Active (shim until wp.org approves the main plugin) |
 
 ## How it fits
 
