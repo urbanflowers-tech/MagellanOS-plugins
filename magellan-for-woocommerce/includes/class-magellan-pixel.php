@@ -41,6 +41,10 @@ class Magellan_Pixel {
 		echo "\n<meta name=\"magellan-account\" content=\"" . esc_attr( $account_id ) . "\">\n";
 		// Endpoint for cart-email REST capture (same-origin POST)
 		echo '<meta name="magellan-rest" content="' . esc_attr( rest_url( 'magellan/v1/cart-email' ) ) . "\">\n";
+		// Endpoint for anonymous cart-state capture (magellan-cart.js).
+		// Distinct from magellan-rest so the cart listener targets /cart
+		// (email optional) and the checkout listener keeps /cart-email.
+		echo '<meta name="magellan-rest-cart" content="' . esc_attr( rest_url( 'magellan/v1/cart' ) ) . "\">\n";
 	}
 
 	public static function enqueue() {
@@ -58,6 +62,20 @@ class Magellan_Pixel {
 			'magellan-pixel',
 			MAGELLAN_PLUGIN_URL . 'assets/magellan-pixel.js',
 			[],
+			MAGELLAN_VERSION,
+			[
+				'in_footer' => true,
+				'strategy'  => 'defer',
+			]
+		);
+
+		// Cart-state listener — every front-end page (add-to-cart fires on
+		// shop / product / archive, not just the cart page). Depends on
+		// magellan-pixel for window.Magellan.getCookie().
+		wp_enqueue_script(
+			'magellan-cart',
+			MAGELLAN_PLUGIN_URL . 'assets/magellan-cart.js',
+			[ 'magellan-pixel' ],
 			MAGELLAN_VERSION,
 			[
 				'in_footer' => true,
