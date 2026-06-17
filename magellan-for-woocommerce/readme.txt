@@ -4,7 +4,7 @@ Tags: woocommerce, analytics, attribution, pixel, conversion tracking
 Requires at least: 6.0
 Tested up to: 6.8
 Requires PHP: 8.0
-Stable tag: 2.2.3
+Stable tag: 2.3.0
 WC requires at least: 7.0
 WC tested up to: 9.x
 License: GPLv2 or later
@@ -102,7 +102,8 @@ This plugin connects to **Magellan's API** (default: https://api.magellan.app) t
 
 * **Order events** — sent when a WooCommerce order moves to `processing` or `completed` status (delayed ~10 seconds via Action Scheduler). Payload includes: order ID, order number, currency, totals (subtotal, shipping, tax, discount, total), line items (SKU, name, quantity, unit price, line total), the order's hashed customer email (SHA-256, never raw), hashed phone (SHA-256, country-aware E.164 normalization, never raw), attribution touches (UTM source/medium/campaign, click IDs such as fbclid/gclid/ttclid, session count, first-touch landing URL, referrer), customer IP address, and User-Agent. Purpose: Magellan cross-references this against what Meta / Google / TikTok / Klaviyo claim, then surfaces overclaim and lets the Conversions API send only the verified events.
 * **Refund / cancellation events** — sent when WooCommerce records a refund or cancels an order that previously sent a verified event. Payload includes refund amount + reason (or cancellation flag), original event ID, hashed identity, currency, and total. Purpose: keep ad-platform conversion counts honest as refunds happen.
-* **Cart email capture** — when a shopper types an email into the WooCommerce checkout, the plugin's frontend JS hashes the email (SHA-256, client-side) and POSTs `{cart_token, identity.email_hash, attribution, cart}` to a local plugin REST endpoint, which signs and forwards to Magellan. Rate-limited to 10 requests per IP per minute. Purpose: abandoned-cart attribution and remarketing tied to verified opt-in.
+* **Cart-state capture** — when the cart changes (item added, quantity updated, item removed) the plugin's frontend JS POSTs an anonymous cart snapshot `{cart_token, attribution, cart}` (NO email) to a local plugin REST endpoint, which signs and forwards to Magellan. The `cart_token` is a random per-browser identifier stored in the visitor's `localStorage`; it is not derived from any personal data. Purpose: abandoned-cart tracking and funnel analytics.
+* **Cart email capture** — when a shopper types an email into the WooCommerce checkout, the plugin's frontend JS hashes the email (SHA-256, client-side) and POSTs `{cart_token, identity.email_hash, attribution, cart}` to a local plugin REST endpoint, which signs and forwards to Magellan. This is what links the earlier anonymous cart to a (hashed) identity. Both cart routes are rate-limited to 10 requests per IP per minute. Purpose: abandoned-cart attribution and remarketing tied to verified opt-in.
 * **Identity batch** — once on plugin activation (and on demand thereafter), the plugin sends a batched list of historical customer identities: hashed email + hashed phone + first/last seen timestamp + order count + external customer ID. Sent in chunks of 500. Purpose: backfill cross-store identity matching for already-completed orders.
 * **Tracking Health report** — once per day (and immediately on plugin activation / deactivation of other plugins) the plugin sends a non-sensitive site profile: WordPress / WooCommerce / PHP versions, HPOS status, checkout type, active theme name, site locale, multisite flag, site URL, count of events sent in the last 24h, a list of conflicting tracking plugins detected by file path, and the slug of any consent or cache plugin detected. Purpose: warn the operator when a duplicate Meta Pixel or GTM container would otherwise cause double-counting.
 
@@ -134,6 +135,13 @@ This plugin is designed to be compatible with consent-management workflows and P
 * **Data residency.** Magellan's API runs in regions disclosed at https://magellan.app/data-residency.
 
 == Changelog ==
+
+= 2.3.0 =
+* **New: cart-state capture for abandoned-cart tracking.** A new front-end listener (`assets/magellan-cart.js`, enqueued site-wide) records the cart on every change — add to cart, quantity update, remove — across both classic and Blocks WooCommerce, *before* the shopper reaches checkout. Carts are captured anonymously (keyed by `cart_token`, no email); identity is stitched on later when the shopper enters their email at checkout. This enables real abandoned-cart tracking instead of only seeing carts that reached the checkout email step.
+* **New REST route** `POST /wp-json/magellan/v1/cart` (email optional) for the anonymous cart-state events. The existing `/cart-email` route (email required) is unchanged for checkout email capture. Both share validation, rate limiting, and the signed-forward path.
+* Cart snapshots now load the WooCommerce cart via `wc_load_cart()` in the REST context, so the server-side snapshot is correct on any page (shop / product / archive), not just checkout.
+* The listener debounces (~900ms) and diffs the `woocommerce_cart_hash` cookie to suppress no-op events (e.g. page-load fragment refreshes), staying within the 10/min rate limit.
+* Requires the matching backend release that accepts anonymous (no-email) cart events.
 
 = 2.2.3 =
 * **Fix (CRITICAL):** account_id validation regex now matches the backend's documented alphabet. The previous regex `[a-z2-7]` allowed `l` and `o` (which the backend never produces per Truth Layer spec §2.2's ambiguous-character exclusion) and excluded `8` and `9` (which the backend produces ~59% of the time). Result: most newly-minted account IDs failed validation, causing `/wp-json/magellan/v1/configure` to 400 with `magellan_bad_account_id`. Corrected to `[a-km-np-z2-9]` — same 32 chars as the backend's `abcdefghijkmnpqrstuvwxyz23456789` alphabet.
@@ -174,6 +182,9 @@ This plugin is designed to be compatible with consent-management workflows and P
 * WooCommerce Blocks compatible
 
 == Upgrade Notice ==
+
+= 2.3.0 =
+Adds cart-state capture for abandoned-cart tracking (records carts on add/update/remove, not just at checkout). Requires the matching backend release. No action needed beyond updating.
 
 = 2.2.3 =
 CRITICAL: fixes account_id regex that rejected ~59% of valid backend-minted IDs (those containing `8` or `9`). Earlier 2.2.x installs would silently fail to configure via the auto-install flow. Upgrade required.
