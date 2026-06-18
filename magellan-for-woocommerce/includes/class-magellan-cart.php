@@ -76,9 +76,11 @@ class Magellan_Cart {
 			return new WP_REST_Response( [ 'ok' => false, 'reason' => 'not_configured' ], 200 );
 		}
 
-		// Rate limit per IP — 10/min (shared budget across both routes).
+		// Rate limit per IP — 10/min, with a SEPARATE budget per route so the
+		// high-volume anonymous /cart traffic can't starve the higher-value
+		// checkout /cart-email capture (priority inversion).
 		$ip  = self::client_ip();
-		$key = self::TRANSIENT_RATE_LIMIT . md5( $ip );
+		$key = self::TRANSIENT_RATE_LIMIT . ( $require_email ? 'email_' : 'cart_' ) . md5( $ip );
 		$cnt = (int) get_transient( $key );
 		if ( $cnt >= self::RATE_LIMIT_PER_MIN ) {
 			return new WP_REST_Response( [ 'ok' => false, 'reason' => 'rate_limited' ], 429 );

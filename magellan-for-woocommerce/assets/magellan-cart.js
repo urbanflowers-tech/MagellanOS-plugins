@@ -24,14 +24,35 @@
 	var HASH_KEY    = '_mgln_cart_hash_sent'; // localStorage: last cart hash we POSTed
 	var TOKEN_KEY   = '_mgln_cart_token';
 
+	// Guarded localStorage access — a throwing getter/setter (storage
+	// disabled / quota) must degrade to a cache-miss, never abort the
+	// listener. The unguarded read used to sit in the debounced callback,
+	// so a throw there killed all future capture.
+	function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+	function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
 	// --- cart_token: reuse the exact scheme magellan-checkout.js uses, so
 	// the anonymous cart and the eventual checkout-email share one token.
+	// Also mirror it into a cookie so the server can read it at order
+	// creation (Magellan_Tracker stamps it onto the order → the verified
+	// order_placed event carries it → backend marks the cart 'converted').
 	function getCartToken() {
-		var existing = localStorage.getItem(TOKEN_KEY);
-		if (existing) return existing;
-		var token = 'cart_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 10);
-		try { localStorage.setItem(TOKEN_KEY, token); } catch (e) {}
+		var existing = lsGet(TOKEN_KEY);
+		var token = existing;
+		if (!token) {
+			token = 'cart_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 10);
+			lsSet(TOKEN_KEY, token);
+		}
+		writeCartTokenCookie(token);
 		return token;
+	}
+
+	function writeCartTokenCookie(token) {
+		try {
+			// 30-day, lax, path=/ so the checkout POST carries it server-side.
+			var d = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toUTCString();
+			document.cookie = TOKEN_KEY + '=' + token + '; expires=' + d + '; path=/; SameSite=Lax';
+		} catch (e) {}
 	}
 
 	function readCookie(name) {
@@ -74,13 +95,23 @@
 	}
 
 	var inFlight = false;
+	var pending  = false; // a cart change arrived while a POST was in flight
 	function sendSnapshot() {
 		var hash = currentCartHash();
-		// Skip if cart unchanged since our last successful send. This is the
-		// primary noise filter — without it, wc_fragments_refreshed on every
-		// page view would trip the server's 10/min rate limit.
-		if (localStorage.getItem(HASH_KEY) === hash) return;
-		if (inFlight) return;
+		var prev = lsGet(HASH_KEY);
+
+		// Never record a still-empty cart we've never sent anything for —
+		// otherwise an ordinary first page view (wc_fragments_refreshed with
+		// no cart) would INSERT a phantom 0-item 'active' cart that the
+		// janitor later flips to 'abandoned'.
+		if (hash === 'empty' && (prev === null || prev === 'empty')) return;
+
+		// Skip if cart unchanged since our last successful send. Primary noise
+		// filter — without it, wc_fragments_refreshed on every page view would
+		// trip the server's 10/min rate limit.
+		if (prev === hash) return;
+
+		if (inFlight) { pending = true; return; }
 		inFlight = true;
 
 		try {
@@ -94,11 +125,16 @@
 				inFlight = false;
 				// Only remember the hash on a successful (2xx) send so a
 				// failure retries on the next event.
-				if (res && res.ok) {
-					try { localStorage.setItem(HASH_KEY, hash); } catch (e) {}
-				}
-			}).catch(function () { inFlight = false; });
-		} catch (e) { inFlight = false; }
+				if (res && res.ok) lsSet(HASH_KEY, hash);
+				flushPending();
+			}).catch(function () { inFlight = false; flushPending(); });
+		} catch (e) { inFlight = false; flushPending(); }
+	}
+
+	// If a distinct cart change landed mid-flight, send the latest state now.
+	// Re-reading the hash makes this a no-op if nothing actually changed.
+	function flushPending() {
+		if (pending) { pending = false; sendSnapshot(); }
 	}
 
 	var debounceTimer = null;
