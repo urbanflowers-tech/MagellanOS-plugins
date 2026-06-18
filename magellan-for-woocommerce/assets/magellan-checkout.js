@@ -28,11 +28,21 @@
 	}
 
 	function getCartToken() {
-		var existing = localStorage.getItem('_mgln_cart_token');
-		if (existing) return existing;
-		// Generate v4-ish token
-		var token = 'cart_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 10);
-		try { localStorage.setItem('_mgln_cart_token', token); } catch (e) {}
+		var existing = null;
+		try { existing = localStorage.getItem('_mgln_cart_token'); } catch (e) {}
+		var token = existing;
+		if (!token) {
+			// Generate v4-ish token
+			token = 'cart_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 10);
+			try { localStorage.setItem('_mgln_cart_token', token); } catch (e) {}
+		}
+		// Mirror into a cookie so the server can stamp it onto the order at
+		// checkout (links the order to the cart for conversion). Same key the
+		// cart listener uses, so they stay one token.
+		try {
+			var d = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toUTCString();
+			document.cookie = '_mgln_cart_token=' + token + '; expires=' + d + '; path=/; SameSite=Lax';
+		} catch (e) {}
 		return token;
 	}
 

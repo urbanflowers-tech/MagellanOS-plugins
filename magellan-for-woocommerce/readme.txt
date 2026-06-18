@@ -4,7 +4,7 @@ Tags: woocommerce, analytics, attribution, pixel, conversion tracking
 Requires at least: 6.0
 Tested up to: 6.8
 Requires PHP: 8.0
-Stable tag: 2.3.0
+Stable tag: 2.3.1
 WC requires at least: 7.0
 WC tested up to: 9.x
 License: GPLv2 or later
@@ -136,6 +136,13 @@ This plugin is designed to be compatible with consent-management workflows and P
 
 == Changelog ==
 
+= 2.3.1 =
+* **Fix (important):** completed orders are now linked back to their cart. The order's `cart_token` is stamped onto the WooCommerce order and included in the verified `order_placed` event, so the backend marks the matching cart `converted` — without this, the abandoned-cart sweep could flag a completed purchase as "abandoned". (Pairs with the matching backend fix.)
+* Fix: the cart listener no longer drops a cart change that arrives while a previous send is still in flight (queues + flushes it).
+* Fix: a brand-new visitor with an empty cart no longer records a phantom zero-item cart.
+* Fix: the anonymous `/cart` route and the checkout `/cart-email` route now have separate per-IP rate-limit budgets, so cart-change traffic can't starve the higher-value checkout email capture.
+* Hardening: all `localStorage` access in the cart listener is guarded, so a storage-disabled browser degrades gracefully instead of silently disabling capture.
+
 = 2.3.0 =
 * **New: cart-state capture for abandoned-cart tracking.** A new front-end listener (`assets/magellan-cart.js`, enqueued site-wide) records the cart on every change — add to cart, quantity update, remove — across both classic and Blocks WooCommerce, *before* the shopper reaches checkout. Carts are captured anonymously (keyed by `cart_token`, no email); identity is stitched on later when the shopper enters their email at checkout. This enables real abandoned-cart tracking instead of only seeing carts that reached the checkout email step.
 * **New REST route** `POST /wp-json/magellan/v1/cart` (email optional) for the anonymous cart-state events. The existing `/cart-email` route (email required) is unchanged for checkout email capture. Both share validation, rate limiting, and the signed-forward path.
@@ -182,6 +189,9 @@ This plugin is designed to be compatible with consent-management workflows and P
 * WooCommerce Blocks compatible
 
 == Upgrade Notice ==
+
+= 2.3.1 =
+Important fix: links completed orders back to their cart so the abandoned-cart sweep can't mislabel a purchase as abandoned. Pairs with the matching backend release. Upgrade recommended for anyone on 2.3.0.
 
 = 2.3.0 =
 Adds cart-state capture for abandoned-cart tracking (records carts on add/update/remove, not just at checkout). Requires the matching backend release. No action needed beyond updating.

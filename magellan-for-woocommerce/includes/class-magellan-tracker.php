@@ -55,6 +55,21 @@ class Magellan_Tracker {
 			return;
 		}
 
+		// Cart token — links this order back to the anonymous cart captured
+		// by magellan-cart.js. The JS mirrors its localStorage cart_token into
+		// the `_mgln_cart_token` cookie so it's readable here at order
+		// creation; stamping it onto the order lets the verified-event payload
+		// carry it, which is what the backend uses to flip the matching cart
+		// to 'converted' (and keep the abandonment janitor from marking a
+		// completed purchase as abandoned). Captured regardless of the
+		// attribution cookie below.
+		$cart_token = isset( $_COOKIE['_mgln_cart_token'] )
+			? sanitize_text_field( wp_unslash( $_COOKIE['_mgln_cart_token'] ) )
+			: '';
+		if ( preg_match( '/^cart_[a-z0-9_]{8,64}$/i', $cart_token ) ) {
+			$order->update_meta_data( '_mgln_cart_token', $cart_token );
+		}
+
 		$raw  = isset( $_COOKIE['_mgln'] ) ? sanitize_text_field( wp_unslash( $_COOKIE['_mgln'] ) ) : '';
 		$data = self::decode_cookie( $raw );
 

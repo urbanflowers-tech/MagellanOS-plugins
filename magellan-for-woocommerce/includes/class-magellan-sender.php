@@ -139,6 +139,12 @@ class Magellan_Sender {
 			'order_number'      => (string) $order->get_order_number(),
 			'order_status'      => $order->get_status(),
 
+			// Links this order to the anonymous cart captured by
+			// magellan-cart.js (stamped onto the order by Magellan_Tracker).
+			// The backend flips the matching cart to 'converted' on this
+			// value. Null when the shopper had no tracked cart token.
+			'cart_token'        => $order->get_meta( '_mgln_cart_token' ) ?: null,
+
 			'currency'          => $order->get_currency(),
 			'subtotal'          => (float) $order->get_subtotal(),
 			'shipping'          => (float) $order->get_shipping_total(),
