@@ -4,7 +4,7 @@ Tags: woocommerce, analytics, attribution, pixel, conversion tracking
 Requires at least: 6.0
 Tested up to: 6.8
 Requires PHP: 8.0
-Stable tag: 2.4.2
+Stable tag: 2.4.3
 WC requires at least: 7.0
 WC tested up to: 9.x
 License: GPLv2 or later
@@ -135,6 +135,9 @@ This plugin is designed to be compatible with consent-management workflows and P
 * **Data residency.** Magellan's API runs in regions disclosed at https://magellan.app/data-residency.
 
 == Changelog ==
+
+= 2.4.3 =
+* **Fix (important): the cart is now captured the moment it changes, even on stores with cart fragments disabled.** The listener previously relied on WooCommerce's JS cart events (`added_to_cart`, etc.), which only fire when the cart-fragments script (classic) or the Cart/Checkout blocks are active. On stores that disable fragments, add-to-cart fired no event, so a cart was only ever recorded on the *next page load* — meaning a fresh visitor who added an item and didn't navigate was never captured. The listener now also watches the underlying cart-mutation network request (classic `?wc-ajax=add_to_cart` / `?add-to-cart=`, and the WooCommerce Store API) and snapshots as soon as it completes — theme-agnostic, no dependency on fragments. Also re-checks when the tab becomes visible again and on back/forward-cache restores.
 
 = 2.4.2 =
 * **Change: the API base is now driven by the backend that provisions the store.** The stored `magellan_api_base` (sent by the configure callback / `/bootstrap` response) now takes priority over the `MAGELLAN_API_BASE` wp-config constant, instead of the other way around. A store sends data to whichever backend installed it, so a dev install self-configures to the dev backend and a production install to production — without editing wp-config. The wp-config constant is still honored as a pre-provisioning bootstrap target / manual fallback when nothing has been provisioned yet. (Fixes the case where a stale `MAGELLAN_API_BASE` constant pinned a dev-provisioned store to production.) The settings → Status panel now shows which source the base came from.
