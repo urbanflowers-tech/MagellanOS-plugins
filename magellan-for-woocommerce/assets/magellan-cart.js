@@ -1,7 +1,9 @@
 /*!
- * Magellan cart-state listener v2.4.1
+ * Magellan cart-state listener v2.4.3
  * Fires on cart changes (add / update qty / remove) across classic and
- * Blocks WooCommerce, plus once on page load, and POSTs an anonymous cart
+ * Blocks WooCommerce, via the underlying cart-mutation network request
+ * (so it works even when cart fragments are disabled), plus once on page
+ * load and on tab re-show, and POSTs an anonymous cart
  * snapshot to Magellan (keyed by cart_token, no email). Identity is
  * stitched on later when the shopper enters an email at checkout. Enables
  * abandoned-cart tracking without waiting for checkout.
@@ -231,6 +233,71 @@
 		['wc-blocks_added_to_cart', 'wc-blocks_removed_from_cart'].forEach(function (evt) {
 			document.body.addEventListener(evt, onCartChanged);
 		});
+	}
+
+	// --- MODE C: network interception (theme-agnostic) ---
+	// MODE A/B only fire when WooCommerce dispatches its JS events, which needs
+	// the cart-fragments script (classic) or the Cart/Checkout blocks. MANY
+	// stores disable fragments — then add-to-cart fires NOTHING, and the cart
+	// is only ever captured on the next page load (the listener below). To
+	// capture the moment the cart actually changes, watch for the underlying
+	// cart-mutation request (classic ?wc-ajax / ?add-to-cart, or the Store API)
+	// and snapshot once it completes. isCartMutation() excludes our own POST
+	// and the Store-API GET our snapshot makes, so this never recurses.
+	function isCartMutation(url, method) {
+		if (!url) return false;
+		var u = String(url);
+		if (u.indexOf('magellan/v1/cart') !== -1) return false; // our own endpoint
+		var m = (method ? String(method) : 'GET').toUpperCase();
+		if (m !== 'GET' && /\/wc\/store\/v\d+\/cart\/(add-item|update-item|remove-item|items)/.test(u)) return true;
+		if (/[?&]wc-ajax=(add_to_cart|update_cart|remove_from_cart)/.test(u)) return true;
+		if (/[?&]add-to-cart=\d/.test(u)) return true;
+		return false;
+	}
+
+	// fetch — wrapped transparently; we only attach a passive post-completion
+	// hook and always return the original promise. Guarded so we can never
+	// break the page's own fetch calls.
+	if (typeof window.fetch === 'function') {
+		var _mglnFetch = window.fetch;
+		window.fetch = function (input, init) {
+			var p = _mglnFetch.apply(this, arguments);
+			try {
+				var url = typeof input === 'string' ? input : (input && input.url) || '';
+				var method = (init && init.method) || (input && input.method) || 'GET';
+				if (isCartMutation(url, method)) { p.then(function () { onCartChanged(); }, function () {}); }
+			} catch (e) { /* ignore */ }
+			return p;
+		};
+	}
+
+	// XMLHttpRequest — same coverage for jQuery/$.ajax-based add-to-cart.
+	try {
+		var _mglnOpen = XMLHttpRequest.prototype.open;
+		var _mglnSend = XMLHttpRequest.prototype.send;
+		XMLHttpRequest.prototype.open = function (method, url) {
+			try { this._mglnCartMut = isCartMutation(url, method); } catch (e) {}
+			return _mglnOpen.apply(this, arguments);
+		};
+		XMLHttpRequest.prototype.send = function () {
+			try {
+				if (this._mglnCartMut) {
+					this.addEventListener('loadend', function () { onCartChanged(); });
+				}
+			} catch (e) {}
+			return _mglnSend.apply(this, arguments);
+		};
+	} catch (e) { /* ignore */ }
+
+	// --- MODE D: re-check when the tab becomes visible / is restored ---
+	// Catches a cart changed in another tab and back/forward-cache restores.
+	if (document.addEventListener) {
+		document.addEventListener('visibilitychange', function () {
+			if (!document.hidden) { onCartChanged(); }
+		});
+	}
+	if (window.addEventListener) {
+		window.addEventListener('pageshow', function () { onCartChanged(); });
 	}
 
 	// --- Initial capture on load ---
