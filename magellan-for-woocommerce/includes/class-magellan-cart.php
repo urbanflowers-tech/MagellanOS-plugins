@@ -134,15 +134,90 @@ class Magellan_Cart {
 				'click_ids'       => $click_clean,
 				'session_count'   => isset( $attribution['session_count'] ) ? (int) $attribution['session_count'] : 1,
 			],
-			'cart' => self::current_cart_snapshot(),
+			'cart' => self::resolve_cart_snapshot( $params ),
 			'consent_state' => apply_filters( 'magellan_consent_state', 'granted', null ),
 		];
 
 		// Forward to Magellan (signed). Same backend route for both — the
 		// backend treats email as optional.
-		Magellan_Sender::send_cart_email( $payload );
+		//
+		// CRITICAL: this is a SYNCHRONOUS REST handler. The sender throws on
+		// connection failure / 5xx so the ORDER path (Action Scheduler) can
+		// retry — but here an uncaught throw becomes an HTTP 500. The cart
+		// listener only records its dedup hash on a 2xx, so a 500 makes it
+		// retry the same event forever and the cart never reaches Magellan.
+		// Swallow transport errors: cart capture is fire-and-forget.
+		try {
+			Magellan_Sender::send_cart_email( $payload );
+		} catch ( \Throwable $e ) {
+			Magellan_Admin::record_error( 'Cart forward failed: ' . $e->getMessage() );
+		}
 
 		return new WP_REST_Response( [ 'ok' => true ], 200 );
+	}
+
+	/**
+	 * Resolve the cart snapshot for the outbound payload.
+	 *
+	 * Source priority:
+	 *   1. Client-supplied `cart` — the listener reads it from WooCommerce's
+	 *      own Store API (`/wp-json/wc/store/v1/cart`) in the browser, which
+	 *      is REST-safe and authoritative. Sanitized before use.
+	 *   2. Server-side read via {@see current_cart_snapshot()} — wrapped in a
+	 *      \Throwable guard so a fatal in `wc_load_cart()` / cart totals (which
+	 *      can happen in a custom REST context where WC()->customer / session
+	 *      isn't initialized) degrades to an empty snapshot instead of
+	 *      returning HTTP 500 for the whole request.
+	 */
+	private static function resolve_cart_snapshot( array $params ): array {
+		$client = isset( $params['cart'] ) && is_array( $params['cart'] ) ? $params['cart'] : null;
+		if ( $client !== null ) {
+			$clean = self::sanitize_client_cart( $client );
+			if ( $clean !== null ) {
+				return $clean;
+			}
+		}
+
+		try {
+			return self::current_cart_snapshot();
+		} catch ( \Throwable $e ) {
+			Magellan_Admin::record_error( 'Cart snapshot failed: ' . $e->getMessage() );
+			return [ 'items' => [], 'subtotal' => 0.0, 'currency' => function_exists( 'get_woocommerce_currency' ) ? get_woocommerce_currency() : '' ];
+		}
+	}
+
+	/**
+	 * Sanitize a browser-supplied cart snapshot (sourced from the WC Store
+	 * API). Bounds every field so a tampered payload can't bloat the request
+	 * — abandoned-cart figures are analytics only; the verified ORDER remains
+	 * the financial source of truth, so a spoofed pre-purchase cart has no
+	 * downstream financial effect.
+	 *
+	 * @return array|null Null when the structure is unusable (caller then
+	 *                    falls back to the server-side snapshot).
+	 */
+	private static function sanitize_client_cart( array $cart ): ?array {
+		$items_in = isset( $cart['items'] ) && is_array( $cart['items'] ) ? $cart['items'] : null;
+		if ( $items_in === null ) {
+			return null;
+		}
+		$items = [];
+		foreach ( array_slice( $items_in, 0, 100 ) as $it ) {
+			if ( ! is_array( $it ) ) {
+				continue;
+			}
+			$items[] = [
+				'sku'        => isset( $it['sku'] ) ? substr( sanitize_text_field( (string) $it['sku'] ), 0, 100 ) : '',
+				'product_id' => isset( $it['product_id'] ) ? max( 0, (int) $it['product_id'] ) : 0,
+				'quantity'   => isset( $it['quantity'] ) ? max( 0, min( 100000, (int) $it['quantity'] ) ) : 0,
+			];
+		}
+		$subtotal = isset( $cart['subtotal'] ) ? (float) $cart['subtotal'] : 0.0;
+		$subtotal = max( 0.0, min( $subtotal, 1.0e12 ) );
+		$currency = isset( $cart['currency'] ) && is_string( $cart['currency'] ) && $cart['currency'] !== ''
+			? substr( sanitize_text_field( $cart['currency'] ), 0, 8 )
+			: ( function_exists( 'get_woocommerce_currency' ) ? get_woocommerce_currency() : '' );
+		return [ 'items' => $items, 'subtotal' => $subtotal, 'currency' => $currency ];
 	}
 
 	private static function sanitize_touch( $touch ): ?array {

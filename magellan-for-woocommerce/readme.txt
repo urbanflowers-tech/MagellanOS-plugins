@@ -4,7 +4,7 @@ Tags: woocommerce, analytics, attribution, pixel, conversion tracking
 Requires at least: 6.0
 Tested up to: 6.8
 Requires PHP: 8.0
-Stable tag: 2.4.0
+Stable tag: 2.4.1
 WC requires at least: 7.0
 WC tested up to: 9.x
 License: GPLv2 or later
@@ -135,6 +135,11 @@ This plugin is designed to be compatible with consent-management workflows and P
 * **Data residency.** Magellan's API runs in regions disclosed at https://magellan.app/data-residency.
 
 == Changelog ==
+
+= 2.4.1 =
+* **Fix (critical): anonymous cart-state events were never recorded.** The site-side `/wp-json/magellan/v1/cart` handler read the cart with a server-side `wc_load_cart()` call that throws a PHP fatal in the custom REST context on some stores (e.g. when `WC()->customer` isn't initialized), returning HTTP 500 *before* the event was forwarded to Magellan. The listener only remembers a cart as sent on a 2xx, so it retried the same event on every page — and the cart never reached the backend. The cart is now read in the browser from WooCommerce's own Store API (`/wp-json/wc/store/v1/cart`) — REST-safe and authoritative — and the handler can no longer 500 (cart-snapshot and forward are both guarded; a failure degrades to a clean response instead of a fatal).
+* **Fix: carts filled on a previous page are now captured.** The listener also snapshots once on page load, not only on in-page AJAX cart events — so a cart populated before the script ran (the common add-to-cart-then-navigate flow) is captured immediately.
+* The no-op suppression no longer depends on the `woocommerce_cart_hash` cookie (which is absent when cart fragments are disabled); it dedupes on a content signature derived from the Store API cart instead.
 
 = 2.4.0 =
 * **New: automatic updates.** The plugin now tells WordPress about new releases, so installed stores see the native "update available" notice and can update in one click — or fully automatically if you enable the per-plugin auto-update toggle. Updates download and overwrite the existing build in place, preserving your settings. (Until the plugin is on wordpress.org, the update source is its GitHub release; this is removed once it's listed on wordpress.org.)
