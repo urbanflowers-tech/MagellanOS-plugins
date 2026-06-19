@@ -72,25 +72,26 @@ class Magellan_Admin {
 	}
 
 	/**
-	 * Resolved API base URL (no trailing slash). Priority:
-	 *   1. wp-config.php constant `MAGELLAN_API_BASE` (highest — for
-	 *      staging / local overrides)
-	 *   2. Stored option `magellan_api_base` (set by Path A configure
-	 *      callback or Path B bootstrap response)
-	 *   3. Default `https://api.magellan.app/v1/pixel`
+	 * Resolved API base URL (no trailing slash). Priority (2.4.2+):
+	 *   1. Stored option `magellan_api_base` — the base the BACKEND pushes
+	 *      at provision time (Path A configure callback / Path B bootstrap).
+	 *      AUTHORITATIVE: the store uses whichever backend installed it.
+	 *   2. wp-config.php constant `MAGELLAN_API_BASE` — pre-provisioning
+	 *      bootstrap / manual fallback, used only when nothing is provisioned.
+	 *   3. Default `https://api.magellan.app/v1/pixel`.
 	 *
-	 * The `MAGELLAN_API_BASE` constant defined in the main plugin file
-	 * already honors this priority chain. This helper is provided so
-	 * future callers can read it via the accessor without depending on
-	 * the constant being defined.
+	 * Matches the MAGELLAN_API_BASE_EFFECTIVE resolution in the main plugin
+	 * file. NOTE: the provisioned option now wins over the constant (it did
+	 * not before 2.4.2) — a stale wp-config constant can no longer pin a
+	 * dev-provisioned store to production.
 	 */
 	public static function get_api_base(): string {
-		if ( defined( 'MAGELLAN_API_BASE' ) ) {
-			return rtrim( (string) MAGELLAN_API_BASE, '/' );
-		}
 		$opt = (string) get_option( self::OPT_API_BASE, '' );
 		if ( $opt !== '' ) {
 			return rtrim( $opt, '/' );
+		}
+		if ( defined( 'MAGELLAN_API_BASE' ) ) {
+			return rtrim( (string) MAGELLAN_API_BASE, '/' );
 		}
 		return 'https://api.magellan.app/v1/pixel';
 	}
@@ -578,11 +579,17 @@ class Magellan_Admin {
 					<th scope="row"><?php echo esc_html__( 'API base', 'magellan-for-woocommerce' ); ?></th>
 					<td>
 						<code><?php echo esc_html( $api_base ); ?></code>
-						<?php if ( defined( 'MAGELLAN_API_BASE' ) ) : ?>
-							<span class="description" style="margin-left:8px;">
-								<?php echo esc_html__( '(from MAGELLAN_API_BASE constant)', 'magellan-for-woocommerce' ); ?>
-							</span>
-						<?php endif; ?>
+						<?php
+						$mgln_base_opt = (string) get_option( self::OPT_API_BASE, '' );
+						if ( $mgln_base_opt !== '' ) {
+							$mgln_base_src = __( '(provisioned by the backend)', 'magellan-for-woocommerce' );
+						} elseif ( defined( 'MAGELLAN_API_BASE' ) ) {
+							$mgln_base_src = __( '(from MAGELLAN_API_BASE constant — fallback; nothing provisioned yet)', 'magellan-for-woocommerce' );
+						} else {
+							$mgln_base_src = __( '(default)', 'magellan-for-woocommerce' );
+						}
+						?>
+						<span class="description" style="margin-left:8px;"><?php echo esc_html( $mgln_base_src ); ?></span>
 					</td>
 				</tr>
 				<tr>

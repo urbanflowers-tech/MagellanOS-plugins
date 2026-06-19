@@ -3,7 +3,7 @@
  * Plugin Name:       Magellan for WooCommerce
  * Plugin URI:        https://magellan.app
  * Description:       First-party attribution pixel for Magellan. Captures verified purchase data and sends it to Magellan for cross-platform attribution and overclaim detection.
- * Version:           2.4.1
+ * Version:           2.4.2
  * Author:            Magellan
  * Author URI:        https://magellan.app
  * License:           GPL-2.0+
@@ -26,36 +26,47 @@ if ( ! defined( 'ABSPATH' ) ) {
 // Constants
 // ---------------------------------------------------------------------
 
-define( 'MAGELLAN_VERSION',            '2.4.1' );
+define( 'MAGELLAN_VERSION',            '2.4.2' );
 define( 'MAGELLAN_PLUGIN_FILE',        __FILE__ );
 define( 'MAGELLAN_PLUGIN_DIR',         plugin_dir_path( __FILE__ ) );
 define( 'MAGELLAN_PLUGIN_URL',         plugin_dir_url( __FILE__ ) );
 
-// API base — resolved in priority order so each environment can
-// override without code changes:
-//   1. `MAGELLAN_API_BASE` define()d in wp-config.php (highest —
-//      cleanest for staging / dev installs, survives plugin updates)
-//   2. Stored option `magellan_api_base` — set by Path A configure
-//      callback or Path B bootstrap response, so the backend can ship
-//      the right base to each install at provision time
-//   3. Default `https://api.magellan.app/v1/pixel`
+// Effective API base — resolved in priority order:
+//   1. Stored option `magellan_api_base` — the base the BACKEND pushes at
+//      provision time (Path A configure callback / Path B bootstrap). This
+//      is AUTHORITATIVE: a store sends to whichever backend installed it, so
+//      a dev install self-configures to the dev backend and a production
+//      install to production, with no wp-config edit. This is the
+//      "configures itself from the provisioning backend" contract.
+//   2. `MAGELLAN_API_BASE` define()d in wp-config.php — a pre-provisioning
+//      bootstrap target / manual fallback, used ONLY when no base has been
+//      provisioned yet (e.g. to aim a fresh install's /bootstrap call at a
+//      specific backend).
+//   3. Default `https://api.magellan.app/v1/pixel`.
 //
-// Trailing slash always stripped so concatenation with /event etc.
-// stays clean. Keep in sync with Magellan_Admin::get_api_base().
-if ( ! defined( 'MAGELLAN_API_BASE' ) ) {
+// NOTE (precedence change in 2.4.2): the provisioned option now wins over
+// the wp-config constant. Previously the constant was highest, which could
+// pin a dev-provisioned store to production if a stale constant was present.
+// Trailing slash always stripped so concatenation with /event etc. stays
+// clean. Keep in sync with Magellan_Admin::get_api_base().
+if ( ! defined( 'MAGELLAN_API_BASE_EFFECTIVE' ) ) {
 	$mgln_api_opt = get_option( 'magellan_api_base', '' );
-	$mgln_api_b   = is_string( $mgln_api_opt ) && $mgln_api_opt !== ''
-		? rtrim( $mgln_api_opt, '/' )
-		: 'https://api.magellan.app/v1/pixel';
-	define( 'MAGELLAN_API_BASE', $mgln_api_b );
+	if ( is_string( $mgln_api_opt ) && $mgln_api_opt !== '' ) {
+		$mgln_api_b = rtrim( $mgln_api_opt, '/' );
+	} elseif ( defined( 'MAGELLAN_API_BASE' ) && is_string( MAGELLAN_API_BASE ) && MAGELLAN_API_BASE !== '' ) {
+		$mgln_api_b = rtrim( (string) MAGELLAN_API_BASE, '/' );
+	} else {
+		$mgln_api_b = 'https://api.magellan.app/v1/pixel';
+	}
+	define( 'MAGELLAN_API_BASE_EFFECTIVE', $mgln_api_b );
 	unset( $mgln_api_opt, $mgln_api_b );
 }
 
-define( 'MAGELLAN_ENDPOINT_EVENT',     MAGELLAN_API_BASE . '/event' );
-define( 'MAGELLAN_ENDPOINT_CART',      MAGELLAN_API_BASE . '/cart-email' );
-define( 'MAGELLAN_ENDPOINT_IDENTS',    MAGELLAN_API_BASE . '/identities' );
-define( 'MAGELLAN_ENDPOINT_HEALTH',    MAGELLAN_API_BASE . '/health' );
-define( 'MAGELLAN_ENDPOINT_BOOTSTRAP', MAGELLAN_API_BASE . '/bootstrap' );
+define( 'MAGELLAN_ENDPOINT_EVENT',     MAGELLAN_API_BASE_EFFECTIVE . '/event' );
+define( 'MAGELLAN_ENDPOINT_CART',      MAGELLAN_API_BASE_EFFECTIVE . '/cart-email' );
+define( 'MAGELLAN_ENDPOINT_IDENTS',    MAGELLAN_API_BASE_EFFECTIVE . '/identities' );
+define( 'MAGELLAN_ENDPOINT_HEALTH',    MAGELLAN_API_BASE_EFFECTIVE . '/health' );
+define( 'MAGELLAN_ENDPOINT_BOOTSTRAP', MAGELLAN_API_BASE_EFFECTIVE . '/bootstrap' );
 
 // ---------------------------------------------------------------------
 // HPOS compatibility declaration (must run before WooCommerce inits)
