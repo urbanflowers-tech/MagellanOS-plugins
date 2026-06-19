@@ -1,10 +1,16 @@
 /*!
- * Magellan cart-state listener v2.3
+ * Magellan cart-state listener v2.4.1
  * Fires on cart changes (add / update qty / remove) across classic and
- * Blocks WooCommerce, and POSTs an anonymous cart snapshot to Magellan
- * (keyed by cart_token, no email). Identity is stitched on later when
- * the shopper enters an email at checkout. Enables abandoned-cart
- * tracking without waiting for checkout.
+ * Blocks WooCommerce, plus once on page load, and POSTs an anonymous cart
+ * snapshot to Magellan (keyed by cart_token, no email). Identity is
+ * stitched on later when the shopper enters an email at checkout. Enables
+ * abandoned-cart tracking without waiting for checkout.
+ *
+ * The cart contents are read from WooCommerce's own Store API
+ * (/wp-json/wc/store/v1/cart) — REST-safe and present even when cart
+ * fragments are disabled — rather than relying on the woocommerce_cart_hash
+ * cookie (set only by the fragments script) or a server-side wc_load_cart()
+ * read (which fatals in the custom REST context on some stores).
  *
  * No WC JS dependency is declared (no jQuery / block-data dep) — the
  * listener feature-detects at runtime so it degrades gracefully on any
@@ -19,6 +25,10 @@
 	if (!meta) return;
 	var REST_URL = meta.getAttribute('content');
 	if (!REST_URL) return;
+
+	// WooCommerce Store API cart, on the same wp-json root as our route
+	// (preserves non-default REST prefixes). Authoritative, REST-safe source.
+	var STORE_CART_URL = REST_URL.replace(/magellan\/v1\/cart$/, 'wc/store/v1/cart');
 
 	var DEBOUNCE_MS = 900;
 	var HASH_KEY    = '_mgln_cart_hash_sent'; // localStorage: last cart hash we POSTed
@@ -70,9 +80,58 @@
 		return readCookie('woocommerce_cart_hash') || 'empty';
 	}
 
-	function buildPayload() {
+	// Read the current cart from WooCommerce's own Store API. REST-safe,
+	// authoritative, and present even when cart fragments are disabled.
+	// Resolves to a normalized {items, subtotal, currency, count} or null on
+	// any failure (caller then falls back to the cookie-hash signature, and
+	// the server falls back to its own snapshot).
+	function readStoreCart() {
+		return fetch(STORE_CART_URL, {
+			method: 'GET',
+			headers: { 'Accept': 'application/json' },
+			credentials: 'same-origin'
+		}).then(function (r) {
+			return (r && r.ok) ? r.json() : null;
+		}).then(function (c) {
+			if (!c || typeof c !== 'object') return null;
+			var totals = c.totals || {};
+			var minor  = (totals.currency_minor_unit != null) ? totals.currency_minor_unit : 2;
+			var div    = Math.pow(10, minor) || 1;
+			// total_items = line-item subtotal (pre shipping/fees), matching
+			// the old server-side WC()->cart->get_subtotal().
+			var raw = (totals.total_items != null) ? totals.total_items
+				: (totals.total_price != null ? totals.total_price : '0');
+			var items = (c.items || []).map(function (it) {
+				return {
+					sku: it && it.sku ? String(it.sku) : '',
+					product_id: it && it.id ? (it.id | 0) : 0,
+					quantity: it && it.quantity ? (it.quantity | 0) : 0
+				};
+			});
+			return {
+				items: items,
+				subtotal: (parseInt(raw, 10) || 0) / div,
+				currency: totals.currency_code || '',
+				count: c.items_count || 0
+			};
+		}).catch(function () { return null; });
+	}
+
+	// Stable signature of the cart contents — suppresses no-op sends without
+	// depending on the woocommerce_cart_hash cookie (absent when fragments are
+	// off). 'empty' for a cart with no items.
+	function cartSignature(store) {
+		if (store) {
+			if (!store.count) return 'empty';
+			return store.count + ':' + Math.round(store.subtotal * 100) + ':' +
+				store.items.map(function (i) { return i.product_id + 'x' + i.quantity; }).join(',');
+		}
+		return currentCartHash(); // fallback to the WC cookie
+	}
+
+	function buildPayload(store) {
 		var pixel = window.Magellan && window.Magellan.getCookie ? window.Magellan.getCookie() : {};
-		return {
+		var payload = {
 			cart_token: getCartToken(),
 			occurred_at: new Date().toISOString(),
 			// No identity — anonymous. Backend stitches identity later via
@@ -92,47 +151,54 @@
 			},
 			consent_state: 'granted'
 		};
+		// Browser-sourced cart snapshot (Store API). The server sanitizes it
+		// and prefers it over its own wc_load_cart() read.
+		if (store) {
+			payload.cart = { items: store.items, subtotal: store.subtotal, currency: store.currency };
+		}
+		return payload;
 	}
 
 	var inFlight = false;
 	var pending  = false; // a cart change arrived while a POST was in flight
 	function sendSnapshot() {
-		var hash = currentCartHash();
-		var prev = lsGet(HASH_KEY);
+		readStoreCart().then(function (store) {
+			var sig  = cartSignature(store);
+			var prev = lsGet(HASH_KEY);
 
-		// Never record a still-empty cart we've never sent anything for —
-		// otherwise an ordinary first page view (wc_fragments_refreshed with
-		// no cart) would INSERT a phantom 0-item 'active' cart that the
-		// janitor later flips to 'abandoned'.
-		if (hash === 'empty' && (prev === null || prev === 'empty')) return;
+			// Never record a still-empty cart we've never sent anything for —
+			// otherwise an ordinary page view with no cart would INSERT a
+			// phantom 0-item 'active' cart that the janitor flips to abandoned.
+			if (sig === 'empty' && (prev === null || prev === 'empty')) return;
 
-		// Skip if cart unchanged since our last successful send. Primary noise
-		// filter — without it, wc_fragments_refreshed on every page view would
-		// trip the server's 10/min rate limit.
-		if (prev === hash) return;
+			// Skip if cart unchanged since our last successful send. Primary
+			// noise filter — without it, a send on every page view would trip
+			// the server's 10/min rate limit.
+			if (prev === sig) return;
 
-		if (inFlight) { pending = true; return; }
-		inFlight = true;
+			if (inFlight) { pending = true; return; }
+			inFlight = true;
 
-		try {
-			fetch(REST_URL, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(buildPayload()),
-				credentials: 'same-origin',
-				keepalive: true
-			}).then(function (res) {
-				inFlight = false;
-				// Only remember the hash on a successful (2xx) send so a
-				// failure retries on the next event.
-				if (res && res.ok) lsSet(HASH_KEY, hash);
-				flushPending();
-			}).catch(function () { inFlight = false; flushPending(); });
-		} catch (e) { inFlight = false; flushPending(); }
+			try {
+				fetch(REST_URL, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify(buildPayload(store)),
+					credentials: 'same-origin',
+					keepalive: true
+				}).then(function (res) {
+					inFlight = false;
+					// Only remember the signature on a successful (2xx) send so
+					// a failure retries on the next event.
+					if (res && res.ok) lsSet(HASH_KEY, sig);
+					flushPending();
+				}).catch(function () { inFlight = false; flushPending(); });
+			} catch (e) { inFlight = false; flushPending(); }
+		});
 	}
 
 	// If a distinct cart change landed mid-flight, send the latest state now.
-	// Re-reading the hash makes this a no-op if nothing actually changed.
+	// Re-reading the cart makes this a no-op if nothing actually changed.
 	function flushPending() {
 		if (pending) { pending = false; sendSnapshot(); }
 	}
@@ -165,5 +231,17 @@
 		['wc-blocks_added_to_cart', 'wc-blocks_removed_from_cart'].forEach(function (evt) {
 			document.body.addEventListener(evt, onCartChanged);
 		});
+	}
+
+	// --- Initial capture on load ---
+	// The listeners above only fire on in-page AJAX cart mutations. A cart
+	// populated on a previous page (the common case: add-to-cart that
+	// navigates, or a returning session) would otherwise never be captured
+	// until the next in-page change. Fire once on load to snapshot the current
+	// cart. Deduped by signature, so it's a no-op when nothing changed.
+	if (document.readyState === 'complete' || document.readyState === 'interactive') {
+		onCartChanged();
+	} else {
+		document.addEventListener('DOMContentLoaded', onCartChanged);
 	}
 })();
