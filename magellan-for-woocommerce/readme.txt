@@ -4,7 +4,7 @@ Tags: woocommerce, analytics, attribution, pixel, conversion tracking
 Requires at least: 6.0
 Tested up to: 6.8
 Requires PHP: 8.0
-Stable tag: 2.3.1
+Stable tag: 2.4.0
 WC requires at least: 7.0
 WC tested up to: 9.x
 License: GPLv2 or later
@@ -135,6 +135,9 @@ This plugin is designed to be compatible with consent-management workflows and P
 * **Data residency.** Magellan's API runs in regions disclosed at https://magellan.app/data-residency.
 
 == Changelog ==
+
+= 2.4.0 =
+* **New: automatic updates.** The plugin now tells WordPress about new releases, so installed stores see the native "update available" notice and can update in one click — or fully automatically if you enable the per-plugin auto-update toggle. Updates download and overwrite the existing build in place, preserving your settings. (Until the plugin is on wordpress.org, the update source is its GitHub release; this is removed once it's listed on wordpress.org.)
 
 = 2.3.1 =
 * **Fix (important):** completed orders are now linked back to their cart. The order's `cart_token` is stamped onto the WooCommerce order and included in the verified `order_placed` event, so the backend marks the matching cart `converted` — without this, the abandoned-cart sweep could flag a completed purchase as "abandoned". (Pairs with the matching backend fix.)
