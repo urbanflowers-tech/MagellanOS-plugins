@@ -3,7 +3,7 @@
  * Plugin Name:       Magellan Staging Installer
  * Plugin URI:        https://github.com/urbanflowers-tech/MagellanOS-plugins
  * Description:       Staging-only helper. Redirects WordPress's wp.org slug lookup for <code>magellan-for-woocommerce</code> to the GitHub release zip, so the MagellanOS extension's auto-install flow works end-to-end before the real Magellan plugin is approved on wordpress.org. Deactivate + delete once the real plugin is on wordpress.org.
- * Version:           1.0.4
+ * Version:           1.0.5
  * Author:            Magellan
  * Author URI:        https://magellan.app
  * License:           GPL-2.0+
@@ -26,8 +26,8 @@ if ( ! defined( 'ABSPATH' ) ) {
  * not need to be re-released for that — just edit + re-upload.)
  */
 const MAGELLAN_STAGING_TARGET_SLUG    = 'magellan-for-woocommerce';
-const MAGELLAN_STAGING_TARGET_VERSION = '2.4.0';
-const MAGELLAN_STAGING_TARGET_ZIP     = 'https://github.com/urbanflowers-tech/MagellanOS-plugins/releases/download/v2.4.0/magellan-for-woocommerce-2.4.0.zip';
+const MAGELLAN_STAGING_TARGET_VERSION = '2.4.1';
+const MAGELLAN_STAGING_TARGET_ZIP     = 'https://github.com/urbanflowers-tech/MagellanOS-plugins/releases/download/v2.4.1/magellan-for-woocommerce-2.4.1.zip';
 
 /**
  * Intercept `plugins_api('plugin_information', { slug })` lookups. When the
