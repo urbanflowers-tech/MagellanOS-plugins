@@ -3,7 +3,7 @@
  * Plugin Name:       Magellan for WooCommerce
  * Plugin URI:        https://magellan.app
  * Description:       First-party attribution pixel for Magellan. Captures verified purchase data and sends it to Magellan for cross-platform attribution and overclaim detection.
- * Version:           2.3.1
+ * Version:           2.4.0
  * Author:            Magellan
  * Author URI:        https://magellan.app
  * License:           GPL-2.0+
@@ -26,7 +26,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 // Constants
 // ---------------------------------------------------------------------
 
-define( 'MAGELLAN_VERSION',            '2.3.1' );
+define( 'MAGELLAN_VERSION',            '2.4.0' );
 define( 'MAGELLAN_PLUGIN_FILE',        __FILE__ );
 define( 'MAGELLAN_PLUGIN_DIR',         plugin_dir_path( __FILE__ ) );
 define( 'MAGELLAN_PLUGIN_URL',         plugin_dir_url( __FILE__ ) );
@@ -88,6 +88,16 @@ add_action(
 			false,
 			dirname( plugin_basename( MAGELLAN_PLUGIN_FILE ) ) . '/languages'
 		);
+
+		// Self-updater registers BEFORE the WooCommerce gate. It has no WC
+		// dependency (only MAGELLAN_PLUGIN_FILE / MAGELLAN_VERSION), and it
+		// must keep working even when WC is inactive — otherwise a WC/WP/PHP
+		// change that breaks WC activation would disable the very updater
+		// that would ship the fix (self-referential trap). WP rebuilds the
+		// update transient from scratch twice daily, so if the filter isn't
+		// registered the plugin silently drops out of the update list.
+		require_once MAGELLAN_PLUGIN_DIR . 'includes/class-magellan-updater.php';
+		Magellan_Updater::init();
 
 		if ( ! class_exists( 'WooCommerce' ) ) {
 			add_action(
