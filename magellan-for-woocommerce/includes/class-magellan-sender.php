@@ -321,7 +321,8 @@ class Magellan_Sender {
 	}
 
 	// ----------------------------------------------------------------
-	// Cart email sender — called from Magellan_Cart REST endpoint
+	// Cart email sender — called SYNCHRONOUSLY from the /cart-email REST
+	// endpoint (checkout email capture; low frequency, user-typed).
 	// ----------------------------------------------------------------
 
 	public static function send_cart_email( array $payload ): bool {
@@ -333,6 +334,47 @@ class Magellan_Sender {
 			$payload['occurred_at'] = gmdate( 'c' );
 		}
 		return self::dispatch_signed( MAGELLAN_ENDPOINT_CART, $payload );
+	}
+
+	// ----------------------------------------------------------------
+	// Cart-state sender — server-side cart hooks (Magellan_Cart) capture the
+	// snapshot and queue it here for ASYNC delivery, so the shopper's
+	// add-to-cart response is never blocked by a call to Magellan.
+	// ----------------------------------------------------------------
+
+	/**
+	 * Queue an async signed send of a captured cart snapshot. Prefers
+	 * as_enqueue_async_action (runs ASAP on a loopback request) so capture is
+	 * near-immediate without blocking; falls back to a 1s scheduled action,
+	 * then WP-Cron. Same backend route as the email path (/cart-email).
+	 */
+	public static function schedule_cart_send( array $payload ): void {
+		if ( ! Magellan_Admin::is_configured() ) {
+			return;
+		}
+		if ( function_exists( 'as_enqueue_async_action' ) ) {
+			as_enqueue_async_action( 'magellan_send_cart_event', [ $payload ], 'magellan' );
+		} elseif ( function_exists( 'as_schedule_single_action' ) ) {
+			as_schedule_single_action( time() + 1, 'magellan_send_cart_event', [ $payload ], 'magellan' );
+		} else {
+			wp_schedule_single_event( time() + 1, 'magellan_send_cart_event', [ $payload ] );
+		}
+	}
+
+	/**
+	 * Action Scheduler callback for a queued cart-state snapshot.
+	 * dispatch_signed() throws on retryable (429/5xx) so AS retries with
+	 * backoff; terminal codes are recorded and dropped.
+	 */
+	public static function send_cart_event( $payload ): void {
+		if ( ! is_array( $payload ) || ! Magellan_Admin::is_configured() ) {
+			return;
+		}
+		$payload['platform'] = 'woocommerce';
+		if ( ! isset( $payload['occurred_at'] ) ) {
+			$payload['occurred_at'] = gmdate( 'c' );
+		}
+		self::dispatch_signed( MAGELLAN_ENDPOINT_CART, $payload );
 	}
 
 	// ----------------------------------------------------------------

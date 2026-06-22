@@ -39,12 +39,10 @@ class Magellan_Pixel {
 
 		$account_id = Magellan_Admin::get_account_id();
 		echo "\n<meta name=\"magellan-account\" content=\"" . esc_attr( $account_id ) . "\">\n";
-		// Endpoint for cart-email REST capture (same-origin POST)
+		// Endpoint for the checkout-email REST capture (same-origin POST).
 		echo '<meta name="magellan-rest" content="' . esc_attr( rest_url( 'magellan/v1/cart-email' ) ) . "\">\n";
-		// Endpoint for anonymous cart-state capture (magellan-cart.js).
-		// Distinct from magellan-rest so the cart listener targets /cart
-		// (email optional) and the checkout listener keeps /cart-email.
-		echo '<meta name="magellan-rest-cart" content="' . esc_attr( rest_url( 'magellan/v1/cart' ) ) . "\">\n";
+		// (The old magellan-rest-cart meta is gone — anonymous cart-state is
+		// now captured server-side via WC hooks, not a browser listener.)
 	}
 
 	public static function enqueue() {
@@ -69,19 +67,9 @@ class Magellan_Pixel {
 			]
 		);
 
-		// Cart-state listener — every front-end page (add-to-cart fires on
-		// shop / product / archive, not just the cart page). Depends on
-		// magellan-pixel for window.Magellan.getCookie().
-		wp_enqueue_script(
-			'magellan-cart',
-			MAGELLAN_PLUGIN_URL . 'assets/magellan-cart.js',
-			[ 'magellan-pixel' ],
-			MAGELLAN_VERSION,
-			[
-				'in_footer' => true,
-				'strategy'  => 'defer',
-			]
-		);
+		// Cart-state capture is server-side now (Magellan_Cart WC hooks) — no
+		// browser listener to enqueue. The pixel above establishes the
+		// _mgln_cart_token cookie the hooks read.
 
 		// Checkout email capture — checkout pages only
 		if ( function_exists( 'is_checkout' ) && is_checkout() && ! is_wc_endpoint_url( 'order-received' ) ) {
