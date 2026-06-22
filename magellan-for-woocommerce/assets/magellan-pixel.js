@@ -1,7 +1,9 @@
 /*!
- * Magellan first-party pixel v2.2
+ * Magellan first-party pixel v2.5
  * Captures UTM parameters, click IDs, and referral source.
  * Stores in first-party cookie (_mgln). 6-month TTL.
+ * Also establishes the _mgln_cart_token cookie (consumed server-side by the
+ * cart-capture hooks + order stamping) so cart capture needs no client JS.
  * Designed for no measurable Core Web Vitals regression.
  */
 (function () {
@@ -196,6 +198,35 @@
 		writeCookie(COOKIE, encoded);
 	}
 
+	// ---------------------------------------------------------
+	// Cart token — a stable per-browser id for the cart, mirrored into a
+	// cookie so the SERVER can read it: the server-side cart-capture hooks
+	// (Magellan_Cart) read it on every cart mutation, and Magellan_Tracker
+	// stamps it onto the order for the cart->order conversion join. It lives
+	// here in the always-loaded pixel so the cookie exists on EVERY page,
+	// before any add-to-cart, on any theme — no cart JS required. Same
+	// localStorage key + format magellan-checkout.js uses, so they share one
+	// token; host-only cookie scope matches checkout.js so there is exactly
+	// one _mgln_cart_token cookie for the server to read.
+	// ---------------------------------------------------------
+	function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+	function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+	function getCartToken() {
+		var token = lsGet('_mgln_cart_token');
+		if (!token) {
+			token = 'cart_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 10);
+			lsSet('_mgln_cart_token', token);
+		}
+		try {
+			var dExp = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toUTCString();
+			document.cookie = '_mgln_cart_token=' + token + '; expires=' + dExp + '; path=/; SameSite=Lax';
+		} catch (e) {}
+		return token;
+	}
+
+	var cartToken = getCartToken();
+
 	// Expose minimal API for other scripts (checkout email capture).
 	// Version is read from the meta tag the plugin injects so we don't
 	// have to bump this string on every release.
@@ -209,6 +240,7 @@
 	}
 	window.Magellan = {
 		v: readPluginVersion(),
-		getCookie: function () { return data; }
+		getCookie: function () { return data; },
+		getCartToken: function () { return cartToken; }
 	};
 })();

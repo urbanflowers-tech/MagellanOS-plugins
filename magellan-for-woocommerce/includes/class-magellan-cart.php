@@ -3,12 +3,18 @@
  * Cart tracking and abandonment.
  *
  * Three responsibilities:
- *   1. Register REST endpoint POST /wp-json/magellan/v1/cart-email
- *      called by checkout JS when email is typed.
- *   2. Hook into WC cart events server-side (add_to_cart, etc.) as
- *      a backup mechanism — Blocks checkout doesn't always fire JS.
- *   3. Webhook reliability backup — every 5 minutes, scan for orders
- *      with verified events not yet sent.
+ *   1. Server-side cart-state capture — hook WC core cart events
+ *      (add_to_cart / item removed / qty updated / emptied), snapshot the
+ *      final cart once per request at shutdown, and queue an async signed
+ *      send. This is the canonical, universal capture path (replaces the old
+ *      browser-side magellan-cart.js listener); it needs no client JS, fires
+ *      only on real changes (not page loads), and works on any theme.
+ *   2. Register REST endpoint POST /wp-json/magellan/v1/cart-email — called
+ *      by checkout JS when the shopper types their email, to attach a
+ *      (hashed) identity to the cart before an order exists. Email-before-
+ *      order is browser-only, so this one path stays client-side.
+ *   3. Webhook reliability backup — every 5 minutes, scan for orders with
+ *      verified events not yet sent.
  *
  * @package Magellan
  */
@@ -22,9 +28,135 @@ class Magellan_Cart {
 	const TRANSIENT_RATE_LIMIT = 'mgln_cart_rl_';
 	const RATE_LIMIT_PER_MIN   = 10;
 
+	/** Per-request flag: a cart mutation occurred; snapshot once at shutdown. */
+	private static $cart_dirty = false;
+
 	public static function init() {
 		add_action( 'rest_api_init', [ __CLASS__, 'register_rest_routes' ] );
 		add_action( 'magellan_sync_check', [ __CLASS__, 'sync_check' ] );
+
+		// --- Server-side cart capture (the canonical path) ---
+		// Every cart mutation goes through WC core, which fires these hooks
+		// exactly once per change — and NOT on page loads / session restore
+		// (which uses set_cart_contents(), firing only
+		// woocommerce_cart_loaded_from_session). We flag the request dirty and
+		// snapshot the FINAL cart once at shutdown: universal across
+		// themes / Blocks / custom add-to-cart, no client JS, no caching
+		// dependency. Replaces the old browser-side magellan-cart.js listener.
+		//
+		// We deliberately do NOT hook woocommerce_cart_emptied: WooCommerce
+		// empties the cart on ORDER COMPLETION, so capturing it would send a
+		// 0-item snapshot for the just-converted cart. We don't record carts
+		// going empty at all (an empty cart isn't an abandoned cart) — see the
+		// empty-snapshot skip in maybe_capture_cart().
+		$mark = [ __CLASS__, 'mark_cart_dirty' ];
+		add_action( 'woocommerce_add_to_cart',                     $mark );
+		add_action( 'woocommerce_cart_item_removed',               $mark );
+		add_action( 'woocommerce_cart_item_restored',              $mark );
+		add_action( 'woocommerce_after_cart_item_quantity_update', $mark );
+		add_action( 'shutdown', [ __CLASS__, 'maybe_capture_cart' ] );
+
+		// Async delivery of the captured snapshot (Action Scheduler / WP-Cron).
+		add_action( 'magellan_send_cart_event', [ 'Magellan_Sender', 'send_cart_event' ], 10, 1 );
+	}
+
+	public static function mark_cart_dirty() {
+		self::$cart_dirty = true;
+	}
+
+	/**
+	 * Runs on `shutdown` (after the response is sent — zero shopper latency).
+	 * If the cart changed this request, snapshot the FINAL cart state and queue
+	 * an async signed send. cart_token + attribution come from the first-party
+	 * cookies the pixel sets on page load. One send per request regardless of
+	 * how many mutations fired.
+	 */
+	public static function maybe_capture_cart() {
+		if ( ! self::$cart_dirty || ! Magellan_Admin::is_configured() ) {
+			return;
+		}
+		$cart_token = self::cart_token_from_cookie();
+		if ( $cart_token === '' ) {
+			return; // pixel sets it on page load; absent => nothing to key on
+		}
+		try {
+			// WC()->cart is loaded in a cart-mutation request, so this does NOT
+			// hit the custom-REST-context wc_load_cart() fatal that the old
+			// /cart route did. Guarded anyway.
+			$snapshot = self::current_cart_snapshot();
+		} catch ( \Throwable $e ) {
+			Magellan_Admin::record_error( 'Cart hook snapshot failed: ' . $e->getMessage() );
+			return;
+		}
+		// Don't send an empty snapshot: an empty cart isn't an abandoned cart,
+		// and the backend preserves captured items on an empty event anyway.
+		// (Covers a shopper removing their last item; order-completion empties
+		// aren't hooked at all — see init().)
+		if ( empty( $snapshot['items'] ) ) {
+			return;
+		}
+		$payload = [
+			'cart_token'    => $cart_token,
+			'occurred_at'   => gmdate( 'c' ),
+			// Cart-state event — anonymous (no email). Identity is attached
+			// later by the checkout-email event sharing the same cart_token.
+			'identity'      => [ 'email_hash' => null, 'phone_hash' => null ],
+			'attribution'   => self::attribution_from_cookie(),
+			'cart'          => $snapshot,
+			'consent_state' => apply_filters( 'magellan_consent_state', 'granted', null ),
+		];
+		Magellan_Sender::schedule_cart_send( $payload );
+	}
+
+	private static function cart_token_from_cookie(): string {
+		$t = isset( $_COOKIE['_mgln_cart_token'] ) ? sanitize_text_field( wp_unslash( $_COOKIE['_mgln_cart_token'] ) ) : '';
+		return preg_match( '/^cart_[a-z0-9_]{8,64}$/i', $t ) ? $t : '';
+	}
+
+	/**
+	 * Build the backend-contract attribution block from the `_mgln` cookie the
+	 * pixel set — reuses Magellan_Tracker::decode_cookie() and the same
+	 * short-key mapping the old client buildPayload used.
+	 */
+	private static function attribution_from_cookie(): array {
+		$raw  = isset( $_COOKIE['_mgln'] ) ? sanitize_text_field( wp_unslash( $_COOKIE['_mgln'] ) ) : '';
+		$data = Magellan_Tracker::decode_cookie( $raw );
+		if ( ! is_array( $data ) ) {
+			return [ 'first_touch' => null, 'last_paid_touch' => null, 'click_ids' => [], 'session_count' => 1 ];
+		}
+		$ft  = isset( $data['ft'] ) ? (int) $data['ft'] : 0;
+		$lts = isset( $data['lts'] ) ? (int) $data['lts'] : 0;
+		$first = ! empty( $data['fs'] ) ? [
+			'source'      => self::cstr( $data, 'fs' ),
+			'medium'      => self::cstr( $data, 'fm' ),
+			'campaign'    => self::cstr( $data, 'fc' ),
+			'occurred_at' => $ft ? gmdate( 'c', $ft ) : null,
+		] : null;
+		$last = ! empty( $data['lsrc'] ) ? [
+			'source'      => self::cstr( $data, 'lsrc' ),
+			'medium'      => self::cstr( $data, 'lmed' ),
+			'campaign'    => self::cstr( $data, 'lcamp' ),
+			'occurred_at' => $lts ? gmdate( 'c', $lts ) : null,
+		] : null;
+		$click_ids = [];
+		$allowed   = [ 'fbclid', 'gclid', 'gbraid', 'wbraid', 'ttclid', 'msclkid', 'twclid' ];
+		$cids = isset( $data['cids'] ) && is_array( $data['cids'] ) ? $data['cids'] : [];
+		foreach ( $allowed as $k ) {
+			if ( isset( $cids[ $k ] ) && is_string( $cids[ $k ] ) ) {
+				$click_ids[ $k ] = substr( sanitize_text_field( $cids[ $k ] ), 0, 500 );
+			}
+		}
+		return [
+			'first_touch'     => $first,
+			'last_paid_touch' => $last,
+			'click_ids'       => $click_ids,
+			'session_count'   => isset( $data['sc'] ) ? (int) $data['sc'] : 1,
+		];
+	}
+
+	private static function cstr( array $data, string $key ): ?string {
+		$v = $data[ $key ] ?? null;
+		return is_string( $v ) && $v !== '' ? substr( sanitize_text_field( (string) $v ), 0, 500 ) : null;
 	}
 
 	// -----------------------------------------------------------
@@ -40,26 +172,15 @@ class Magellan_Cart {
 			'permission_callback' => '__return_true',
 		] );
 
-		// Anonymous cart-state capture (email OPTIONAL) — called by the
-		// cart-change listener (magellan-cart.js) on add-to-cart / qty /
-		// remove, before the shopper has provided an email. Identity is
-		// stitched on later when the same cart_token reaches /cart-email
-		// at checkout. Enables real abandoned-cart tracking.
-		register_rest_route( 'magellan/v1', '/cart', [
-			'methods'             => 'POST',
-			'callback'            => [ __CLASS__, 'handle_cart_snapshot' ],
-			'permission_callback' => '__return_true',
-		] );
+		// NOTE: the old anonymous cart-state route (POST /magellan/v1/cart,
+		// driven by magellan-cart.js) is gone — cart state is now captured
+		// server-side via WC hooks (see init()). Only the checkout-email
+		// capture remains client-side (email-before-order is browser-only).
 	}
 
 	/** Checkout email path — email required. */
 	public static function handle_cart_email( WP_REST_Request $req ) {
 		return self::handle_cart_event( $req, true );
-	}
-
-	/** Anonymous cart-state path — email optional. */
-	public static function handle_cart_snapshot( WP_REST_Request $req ) {
-		return self::handle_cart_event( $req, false );
 	}
 
 	/**
